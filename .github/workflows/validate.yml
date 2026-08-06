@@ -1,0 +1,42 @@
+name: Validate installer
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Bash syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in ./*.sh; do
+            bash -n "$script"
+          done
+
+      - name: Validate Docker Compose
+        shell: bash
+        env:
+          PUID: "1000"
+          PGID: "1000"
+          TZ: America/Chicago
+          BIND_IP: 127.0.0.1
+          DATA_ROOT: /data
+          CONFIG_ROOT: /opt/media-stack/config
+          RENDER_GID: "109"
+          PROTON_WIREGUARD_PRIVATE_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          PROTON_WIREGUARD_ADDRESSES: 10.2.0.2/32
+          PROTON_SERVER_COUNTRIES: United States
+          DISPATCHARR_SECRET_KEY: validation-only-secret
+          PLEX_CLAIM: ""
+          COMPOSE_PROFILES: iptv,plex,music,books,usenet,automation,admin
+        run: docker compose -f compose.yml -f compose.intel.yml config --quiet
+
