@@ -1,0 +1,11 @@
+.env
+*.env
+*.conf
+*.key
+*.zip
+config/
+backups/
+downloads/
+*.log
+.DS_Store
+
