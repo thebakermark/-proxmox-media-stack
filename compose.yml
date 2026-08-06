@@ -1,0 +1,331 @@
+name: media-stack
+
+x-lsio-environment: &lsio-environment
+  PUID: ${PUID}
+  PGID: ${PGID}
+  TZ: ${TZ}
+  UMASK: "002"
+
+x-defaults: &defaults
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  gluetun:
+    <<: *defaults
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TZ: ${TZ}
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${PROTON_WIREGUARD_PRIVATE_KEY}
+      WIREGUARD_ADDRESSES: ${PROTON_WIREGUARD_ADDRESSES}
+      SERVER_COUNTRIES: ${PROTON_SERVER_COUNTRIES}
+      PORT_FORWARD_ONLY: "on"
+      VPN_PORT_FORWARDING: "on"
+      FIREWALL_INPUT_PORTS: "8080"
+      HEALTH_VPN_DURATION_INITIAL: 30s
+      VPN_PORT_FORWARDING_UP_COMMAND: >-
+        /bin/sh -c 'wget -O- -nv --retry-connrefused --post-data
+        "json={\"listen_port\":{{PORT}},\"current_network_interface\":\"{{VPN_INTERFACE}}\",\"random_port\":false,\"upnp\":false}"
+        http://127.0.0.1:8080/api/v2/app/setPreferences'
+      VPN_PORT_FORWARDING_DOWN_COMMAND: >-
+        /bin/sh -c 'wget -O- -nv --retry-connrefused --post-data
+        "json={\"listen_port\":0,\"current_network_interface\":\"lo\"}"
+        http://127.0.0.1:8080/api/v2/app/setPreferences'
+    ports:
+      - "${BIND_IP}:8080:8080"
+    volumes:
+      - ${CONFIG_ROOT}/gluetun:/gluetun
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  qbittorrent:
+    <<: *defaults
+    image: lscr.io/linuxserver/qbittorrent:5.1.4
+    container_name: qbittorrent
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      <<: *lsio-environment
+      WEBUI_PORT: "8080"
+      TORRENTING_PORT: "6881"
+    volumes:
+      - ${CONFIG_ROOT}/qbittorrent:/config
+      - ${DATA_ROOT}:/data
+    stop_grace_period: 30s
+
+  jellyfin:
+    <<: *defaults
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    user: "${PUID}:${PGID}"
+    group_add:
+      - "${RENDER_GID}"
+    environment:
+      TZ: ${TZ}
+    ports:
+      - "${BIND_IP}:8096:8096"
+      - "${BIND_IP}:7359:7359/udp"
+    volumes:
+      - ${CONFIG_ROOT}/jellyfin/config:/config
+      - ${CONFIG_ROOT}/jellyfin/cache:/cache
+      - ${DATA_ROOT}/media:/media:ro
+      - ${DATA_ROOT}/recordings:/recordings
+    networks:
+      - media
+
+  sonarr:
+    <<: *defaults
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:8989:8989"
+    volumes:
+      - ${CONFIG_ROOT}/sonarr:/config
+      - ${DATA_ROOT}:/data
+    networks:
+      - media
+
+  radarr:
+    <<: *defaults
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:7878:7878"
+    volumes:
+      - ${CONFIG_ROOT}/radarr:/config
+      - ${DATA_ROOT}:/data
+    networks:
+      - media
+
+  prowlarr:
+    <<: *defaults
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:9696:9696"
+    volumes:
+      - ${CONFIG_ROOT}/prowlarr:/config
+    networks:
+      - media
+
+  bazarr:
+    <<: *defaults
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:6767:6767"
+    volumes:
+      - ${CONFIG_ROOT}/bazarr:/config
+      - ${DATA_ROOT}/media:/data/media
+    networks:
+      - media
+
+  seerr:
+    <<: *defaults
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    init: true
+    user: "${PUID}:${PGID}"
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ}
+    ports:
+      - "${BIND_IP}:5055:5055"
+    volumes:
+      - ${CONFIG_ROOT}/seerr:/app/config
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5055/api/v1/settings/public || exit 1"]
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
+
+  plex:
+    <<: *defaults
+    profiles: ["plex"]
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    network_mode: host
+    environment:
+      <<: *lsio-environment
+      VERSION: docker
+      PLEX_CLAIM: ${PLEX_CLAIM:-}
+    volumes:
+      - ${CONFIG_ROOT}/plex:/config
+      - ${DATA_ROOT}/media:/data/media:ro
+      - ${DATA_ROOT}/recordings:/data/recordings
+
+  dispatcharr:
+    <<: *defaults
+    profiles: ["iptv"]
+    image: ghcr.io/dispatcharr/dispatcharr:latest
+    container_name: dispatcharr
+    environment:
+      TZ: ${TZ}
+      DISPATCHARR_ENV: aio
+      REDIS_HOST: localhost
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      DJANGO_SECRET_KEY: ${DISPATCHARR_SECRET_KEY}
+      DISPATCHARR_LOG_LEVEL: info
+    ports:
+      - "${BIND_IP}:9191:9191"
+    volumes:
+      - ${CONFIG_ROOT}/dispatcharr:/data
+    networks:
+      - media
+
+  tunarr:
+    <<: *defaults
+    profiles: ["iptv"]
+    image: chrisbenincasa/tunarr:latest
+    container_name: tunarr
+    environment:
+      TZ: ${TZ}
+    ports:
+      - "${BIND_IP}:8000:8000"
+    volumes:
+      - ${CONFIG_ROOT}/tunarr:/config/tunarr
+    networks:
+      - media
+
+  tautulli:
+    <<: *defaults
+    profiles: ["plex"]
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: tautulli
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:8181:8181"
+    volumes:
+      - ${CONFIG_ROOT}/tautulli:/config
+    networks:
+      - media
+
+  lidarr:
+    <<: *defaults
+    profiles: ["music"]
+    image: lscr.io/linuxserver/lidarr:latest
+    container_name: lidarr
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:8686:8686"
+    volumes:
+      - ${CONFIG_ROOT}/lidarr:/config
+      - ${DATA_ROOT}:/data
+    networks:
+      - media
+
+  audiobookshelf:
+    <<: *defaults
+    profiles: ["books"]
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    ports:
+      - "${BIND_IP}:13378:80"
+    volumes:
+      - ${DATA_ROOT}/media/audiobooks:/audiobooks
+      - ${DATA_ROOT}/media/podcasts:/podcasts
+      - ${CONFIG_ROOT}/audiobookshelf/config:/config
+      - ${CONFIG_ROOT}/audiobookshelf/metadata:/metadata
+    networks:
+      - media
+
+  sabnzbd:
+    <<: *defaults
+    profiles: ["usenet"]
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    environment: *lsio-environment
+    ports:
+      - "${BIND_IP}:8085:8080"
+    volumes:
+      - ${CONFIG_ROOT}/sabnzbd:/config
+      - ${DATA_ROOT}:/data
+    networks:
+      - media
+
+  recyclarr:
+    <<: *defaults
+    profiles: ["automation"]
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    user: "${PUID}:${PGID}"
+    environment:
+      TZ: ${TZ}
+      CRON_SCHEDULE: "@daily"
+    volumes:
+      - ${CONFIG_ROOT}/recyclarr:/config
+    networks:
+      - media
+
+  homepage:
+    <<: *defaults
+    profiles: ["admin"]
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: "*"
+      PUID: ${PUID}
+      PGID: ${PGID}
+    ports:
+      - "${BIND_IP}:3000:3000"
+    volumes:
+      - ${CONFIG_ROOT}/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - media
+
+  dozzle:
+    <<: *defaults
+    profiles: ["admin"]
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    ports:
+      - "${BIND_IP}:9999:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - media
+
+  uptime-kuma:
+    <<: *defaults
+    profiles: ["admin"]
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    ports:
+      - "${BIND_IP}:3001:3001"
+    volumes:
+      - ${CONFIG_ROOT}/uptime-kuma:/app/data
+    networks:
+      - media
+
+networks:
+  media:
+    name: media-stack
