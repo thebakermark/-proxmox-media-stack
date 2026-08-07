@@ -2,10 +2,13 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly DEFAULT_IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
-readonly CHECKSUM_URL="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
+readonly UBUNTU_RELEASE="26.04"
+readonly UBUNTU_CODENAME="resolute"
+readonly IMAGE_NAME="ubuntu-26.04-server-cloudimg-amd64.img"
+readonly DEFAULT_IMAGE_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/${IMAGE_NAME}"
+readonly CHECKSUM_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/SHA256SUMS"
 readonly IMAGE_DIR="/var/lib/vz/template/iso"
-readonly IMAGE_PATH="${IMAGE_DIR}/debian-13-genericcloud-amd64.qcow2"
+readonly IMAGE_PATH="${IMAGE_DIR}/${IMAGE_NAME}"
 
 VMID=""
 VM_NAME="media-stack"
@@ -24,7 +27,7 @@ info() { printf '%s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-Create a Debian 13 media-stack VM on Proxmox VE.
+Create an Ubuntu Server 26.04 LTS media-stack VM on Proxmox VE.
 
 Usage:
   sudo ./00-create-proxmox-vm.sh [options]
@@ -70,7 +73,7 @@ done
 command -v qm >/dev/null || die "qm was not found. Run this on a Proxmox VE host."
 command -v pvesm >/dev/null || die "pvesm was not found."
 command -v curl >/dev/null || die "curl is required."
-command -v sha512sum >/dev/null || die "sha512sum is required."
+command -v sha256sum >/dev/null || die "sha256sum is required."
 
 [[ "$CORES" =~ ^[1-9][0-9]*$ ]] || die "--cores must be a positive integer."
 [[ "$MEMORY_MB" =~ ^[1-9][0-9]*$ ]] || die "--memory must be a positive integer."
@@ -91,32 +94,32 @@ fi
 qm status "$VMID" >/dev/null 2>&1 && die "VM ID $VMID already exists."
 
 install -d -m 0755 "$IMAGE_DIR"
-CHECKSUM_FILE="$(mktemp /tmp/debian-cloud-sha512.XXXXXX)"
+CHECKSUM_FILE="$(mktemp /tmp/ubuntu-cloud-sha256.XXXXXX)"
 trap 'rm -f "$CHECKSUM_FILE"' EXIT
 curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$CHECKSUM_FILE" "$CHECKSUM_URL"
-EXPECTED_SUM_LINE="$(grep ' debian-13-genericcloud-amd64.qcow2$' "$CHECKSUM_FILE" || true)"
-[[ -n "$EXPECTED_SUM_LINE" ]] || die "Debian checksum manifest did not contain the expected image."
+EXPECTED_SUM_LINE="$(grep " ${IMAGE_NAME}$" "$CHECKSUM_FILE" || true)"
+[[ -n "$EXPECTED_SUM_LINE" ]] || die "Ubuntu checksum manifest did not contain ${IMAGE_NAME}."
 
 image_is_current="no"
-if [[ -s "$IMAGE_PATH" ]] && (cd "$IMAGE_DIR" && printf '%s\n' "$EXPECTED_SUM_LINE" | sha512sum --check --status); then
+if [[ -s "$IMAGE_PATH" ]] && (cd "$IMAGE_DIR" && printf '%s\n' "$EXPECTED_SUM_LINE" | sha256sum --check --status); then
   image_is_current="yes"
 fi
 
 if [[ "$image_is_current" != "yes" ]]; then
-  info "Downloading the current Debian 13 generic cloud image..."
+  info "Downloading the current Ubuntu Server ${UBUNTU_RELEASE} LTS cloud image..."
   curl --fail --location --proto '=https' --tlsv1.2 \
     --output "${IMAGE_PATH}.partial" "$DEFAULT_IMAGE_URL"
   mv "${IMAGE_PATH}.partial" "$IMAGE_PATH"
-  (cd "$IMAGE_DIR" && printf '%s\n' "$EXPECTED_SUM_LINE" | sha512sum --check --status) \
-    || die "Debian image checksum verification failed."
+  (cd "$IMAGE_DIR" && printf '%s\n' "$EXPECTED_SUM_LINE" | sha256sum --check --status) \
+    || die "Ubuntu image checksum verification failed."
 else
-  info "Using checksum-verified cached Debian image: $IMAGE_PATH"
+  info "Using checksum-verified cached Ubuntu image: $IMAGE_PATH"
 fi
 rm -f "$CHECKSUM_FILE"
 trap - EXIT
 
-read -r -s -p "Password for Debian user '${CI_USER}': " CI_PASSWORD
+read -r -s -p "Password for Ubuntu user '${CI_USER}': " CI_PASSWORD
 printf '\n'
 [[ ${#CI_PASSWORD} -ge 12 ]] || die "Use a password of at least 12 characters."
 read -r -s -p "Repeat password: " CI_PASSWORD_CONFIRM
@@ -133,10 +136,10 @@ cleanup_failed_vm() {
 }
 trap cleanup_failed_vm EXIT
 
-info "Creating VM $VMID ($VM_NAME)..."
+info "Creating Ubuntu ${UBUNTU_RELEASE} LTS VM $VMID ($VM_NAME)..."
 qm create "$VMID" \
   --name "$VM_NAME" \
-  --description "Debian media stack: Jellyfin + Servarr + Proton VPN isolated qBittorrent" \
+  --description "Ubuntu 26.04 LTS media stack: Jellyfin + Servarr + Proton VPN isolated qBittorrent" \
   --ostype l26 \
   --machine q35 \
   --cpu host \
@@ -158,6 +161,7 @@ qm set "$VMID" --ide2 "${VM_STORAGE}:cloudinit"
 qm set "$VMID" --boot order=scsi0
 qm set "$VMID" --ciuser "$CI_USER" --cipassword "$CI_PASSWORD"
 qm set "$VMID" --ipconfig0 ip=dhcp
+qm set "$VMID" --ciupgrade 1
 unset CI_PASSWORD
 
 if [[ -n "$DATA_STORAGE" ]]; then
@@ -170,9 +174,10 @@ if [[ "$START_VM" == "yes" ]]; then
 fi
 
 trap - EXIT
-info "VM $VMID created successfully."
+info "VM $VMID created successfully with Ubuntu Server ${UBUNTU_RELEASE} LTS (${UBUNTU_CODENAME})."
 info "Open its Proxmox console and sign in as '$CI_USER'."
-info "Copy the remaining package files into the VM, then run: sudo ./10-install-media-stack.sh"
+info "Then bootstrap the media stack with:"
+info "  sudo apt-get update && sudo apt-get install -y git && git clone https://github.com/thebakermark/-proxmox-media-stack.git && cd ./-proxmox-media-stack && sudo ./10-install-media-stack.sh"
 if [[ -n "$DATA_STORAGE" ]]; then
-  info "The new blank data disk will appear in Debian as an additional block device."
+  info "The new blank data disk will appear in Ubuntu as an additional block device."
 fi
