@@ -98,7 +98,7 @@ CHECKSUM_FILE="$(mktemp /tmp/ubuntu-cloud-sha256.XXXXXX)"
 trap 'rm -f "$CHECKSUM_FILE"' EXIT
 curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$CHECKSUM_FILE" "$CHECKSUM_URL"
-EXPECTED_SUM_LINE="$(grep " ${IMAGE_NAME}$" "$CHECKSUM_FILE" || true)"
+EXPECTED_SUM_LINE="$(awk -v image="$IMAGE_NAME" '$2 == "*" image || $2 == image {print; exit}' "$CHECKSUM_FILE")"
 [[ -n "$EXPECTED_SUM_LINE" ]] || die "Ubuntu checksum manifest did not contain ${IMAGE_NAME}."
 
 image_is_current="no"
