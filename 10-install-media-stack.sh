@@ -9,11 +9,12 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
 [[ ${EUID} -eq 0 ]] || die "Run with sudo: sudo ./10-install-media-stack.sh"
-[[ -r /etc/os-release ]] || die "This installer requires Debian."
+[[ -r /etc/os-release ]] || die "This installer requires Ubuntu Server 26.04 LTS."
 [[ ! -e "$ENV_FILE" ]] || die "An installation already exists at $STACK_DIR. Use 40-update-stack.sh instead of reinstalling."
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "${ID:-}" == "debian" ]] || die "This installer supports Debian 12 or 13."
+[[ "${ID:-}" == "ubuntu" ]] || die "This installer supports Ubuntu Server 26.04 LTS."
+[[ "${VERSION_ID:-}" == "26.04" ]] || die "Expected Ubuntu 26.04 LTS; detected ${PRETTY_NAME:-unknown OS}."
 
 TARGET_USER="${SUDO_USER:-mediaadmin}"
 id "$TARGET_USER" >/dev/null 2>&1 || die "User '$TARGET_USER' does not exist."
@@ -67,17 +68,17 @@ configure_data_mount() {
 
 configure_data_mount
 
-info "Installing Docker Engine from Docker's official Debian repository..."
+info "Installing Docker Engine from Docker's official Ubuntu repository..."
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg jq openssl qemu-guest-agent
 systemctl enable --now qemu-guest-agent
 install -m 0755 -d /etc/apt/keyrings
-curl --fail --silent --show-error --location https://download.docker.com/linux/debian/gpg \
+curl --fail --silent --show-error --location https://download.docker.com/linux/ubuntu/gpg \
   -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
 cat > /etc/apt/sources.list.d/docker.sources <<EOF
 Types: deb
-URIs: https://download.docker.com/linux/debian
+URIs: https://download.docker.com/linux/ubuntu
 Suites: ${VERSION_CODENAME}
 Components: stable
 Architectures: $(dpkg --print-architecture)
@@ -143,9 +144,6 @@ EOF
 chmod 0600 "$ENV_FILE"
 unset PROTON_PRIVATE_KEY
 
-# Preseed only the localhost-auth setting required for Gluetun's official
-# forwarded-port callback. LAN users still receive qBittorrent's temporary
-# admin password on first boot and must replace it.
 install -d -m 0775 -o "$PUID" -g "$PGID" "$CONFIG_ROOT/qbittorrent/qBittorrent"
 cat > "$CONFIG_ROOT/qbittorrent/qBittorrent/qBittorrent.conf" <<'EOF'
 [Preferences]
