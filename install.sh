@@ -17,7 +17,7 @@ command -v git >/dev/null 2>&1 || {
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
   info "Refreshing existing installer checkout..."
-  git -C "$INSTALL_DIR" fetch --ff-only origin main
+  git -C "$INSTALL_DIR" fetch origin main
   git -C "$INSTALL_DIR" checkout main
   git -C "$INSTALL_DIR" reset --hard origin/main
 else
