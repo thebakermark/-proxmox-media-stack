@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly SCRIPT_NAME="$(basename "$0")"
 readonly UBUNTU_RELEASE="26.04"
 readonly UBUNTU_CODENAME="resolute"
 readonly IMAGE_NAME="ubuntu-26.04-server-cloudimg-amd64.img"
@@ -9,6 +8,10 @@ readonly DEFAULT_IMAGE_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RE
 readonly CHECKSUM_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/SHA256SUMS"
 readonly IMAGE_DIR="/var/lib/vz/template/iso"
 readonly IMAGE_PATH="${IMAGE_DIR}/${IMAGE_NAME}"
+readonly STATE_DIR="/root/.proxmox-media-stack"
+readonly SSH_KEY_PATH="${STATE_DIR}/id_ed25519"
+readonly SSH_PUB_PATH="${SSH_KEY_PATH}.pub"
+readonly STATE_FILE="${STATE_DIR}/last-vm.env"
 
 VMID=""
 VM_NAME="media-stack"
@@ -48,6 +51,11 @@ Options:
 
 This script never formats or wipes physical data drives. If a second data disk
 is requested, it allocates a new Proxmox-managed virtual disk only.
+
+A dedicated SSH key is generated at /root/.proxmox-media-stack/id_ed25519 and
+installed into the guest via cloud-init so the install.sh orchestrator can
+finish setup automatically without a manual console login. The cloud-init
+password remains a valid fallback login method.
 EOF
 }
 
@@ -74,6 +82,7 @@ command -v qm >/dev/null || die "qm was not found. Run this on a Proxmox VE host
 command -v pvesm >/dev/null || die "pvesm was not found."
 command -v curl >/dev/null || die "curl is required."
 command -v sha256sum >/dev/null || die "sha256sum is required."
+command -v ssh-keygen >/dev/null || die "ssh-keygen is required (part of openssh-client)."
 
 [[ "$CORES" =~ ^[1-9][0-9]*$ ]] || die "--cores must be a positive integer."
 [[ "$MEMORY_MB" =~ ^[1-9][0-9]*$ ]] || die "--memory must be a positive integer."
@@ -127,6 +136,14 @@ printf '\n'
 [[ "$CI_PASSWORD" == "$CI_PASSWORD_CONFIRM" ]] || die "Passwords did not match."
 unset CI_PASSWORD_CONFIRM
 
+install -d -m 0700 "$STATE_DIR"
+if [[ ! -s "$SSH_KEY_PATH" ]]; then
+  info "Generating a dedicated SSH key so this installer can finish setup inside the guest automatically..."
+  ssh-keygen -t ed25519 -N '' -C "proxmox-media-stack-installer" -f "$SSH_KEY_PATH" >/dev/null
+fi
+chmod 0600 "$SSH_KEY_PATH"
+chmod 0644 "$SSH_PUB_PATH"
+
 cleanup_failed_vm() {
   local exit_code=$?
   if ((exit_code != 0)) && qm status "$VMID" >/dev/null 2>&1; then
@@ -159,7 +176,7 @@ qm set "$VMID" --scsi0 "${VM_STORAGE}:0,import-from=${IMAGE_PATH},discard=on,ssd
 qm disk resize "$VMID" scsi0 "${OS_DISK_GB}G"
 qm set "$VMID" --ide2 "${VM_STORAGE}:cloudinit"
 qm set "$VMID" --boot order=scsi0
-qm set "$VMID" --ciuser "$CI_USER" --cipassword "$CI_PASSWORD"
+qm set "$VMID" --ciuser "$CI_USER" --cipassword "$CI_PASSWORD" --sshkeys "$SSH_PUB_PATH"
 qm set "$VMID" --ipconfig0 ip=dhcp
 qm set "$VMID" --ciupgrade 1
 unset CI_PASSWORD
@@ -174,9 +191,23 @@ if [[ "$START_VM" == "yes" ]]; then
 fi
 
 trap - EXIT
+
+cat > "$STATE_FILE" <<EOF
+VMID=${VMID}
+VM_NAME=${VM_NAME}
+CI_USER=${CI_USER}
+START_VM=${START_VM}
+DATA_DISK_REQUESTED=$([[ -n "$DATA_STORAGE" ]] && echo yes || echo no)
+SSH_KEY_PATH=${SSH_KEY_PATH}
+EOF
+chmod 0600 "$STATE_FILE"
+
 info "VM $VMID created successfully with Ubuntu Server ${UBUNTU_RELEASE} LTS (${UBUNTU_CODENAME})."
-info "Open its Proxmox console and sign in as '$CI_USER'."
-info "Then bootstrap the media stack with:"
+if [[ "$START_VM" != "yes" ]]; then
+  info "The VM was created but not started (--no-start). Start it with 'qm start $VMID' when ready."
+fi
+info "Manual fallback if automatic guest bootstrap does not run or does not reach the VM:"
+info "  Open its Proxmox console and sign in as '$CI_USER'."
 info "  sudo apt-get update && sudo apt-get install -y git && git clone https://github.com/thebakermark/-proxmox-media-stack.git && cd ./-proxmox-media-stack && sudo ./10-install-media-stack.sh"
 if [[ -n "$DATA_STORAGE" ]]; then
   info "The new blank data disk will appear in Ubuntu as an additional block device."
