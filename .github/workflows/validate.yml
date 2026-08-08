@@ -9,34 +9,67 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  shell-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check Bash syntax
-        shell: bash
         run: |
           set -euo pipefail
-          for script in ./*.sh; do
+          for script in ./*.sh tests/*.sh; do
             bash -n "$script"
           done
 
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          shellcheck -S warning -x ./*.sh tests/*.sh
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    env:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: America/Chicago
+      BIND_IP: 127.0.0.1
+      DATA_ROOT: /data
+      CONFIG_ROOT: /opt/media-stack/config
+      RENDER_GID: "109"
+      PROTON_WIREGUARD_PRIVATE_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      PROTON_WIREGUARD_ADDRESSES: 10.2.0.2/32
+      PROTON_SERVER_COUNTRIES: United States
+      DISPATCHARR_SECRET_KEY: validation-only-secret
+      PLEX_CLAIM: ""
+      COMPOSE_PROFILES: iptv,plex,music,books,usenet,automation,admin
+    steps:
+      - uses: actions/checkout@v6
+
       - name: Validate Docker Compose
-        shell: bash
-        env:
-          PUID: "1000"
-          PGID: "1000"
-          TZ: America/Chicago
-          BIND_IP: 127.0.0.1
-          DATA_ROOT: /data
-          CONFIG_ROOT: /opt/media-stack/config
-          RENDER_GID: "109"
-          PROTON_WIREGUARD_PRIVATE_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-          PROTON_WIREGUARD_ADDRESSES: 10.2.0.2/32
-          PROTON_SERVER_COUNTRIES: United States
-          DISPATCHARR_SECRET_KEY: validation-only-secret
-          PLEX_CLAIM: ""
-          COMPOSE_PROFILES: iptv,plex,music,books,usenet,automation,admin
         run: docker compose -f compose.yml -f compose.intel.yml config --quiet
 
+      - name: Assert qBittorrent is network-isolated behind Gluetun (resolved config)
+        run: |
+          docker compose -f compose.yml -f compose.intel.yml config --format json > /tmp/compose.json
+          jq -e '.services.qbittorrent.network_mode == "service:gluetun"' /tmp/compose.json
+          jq -e '(.services.qbittorrent.networks // {}) == {}' /tmp/compose.json
+          jq -e '.services.qbittorrent.depends_on.gluetun.condition == "service_healthy"' /tmp/compose.json
+          jq -e '.services.qbittorrent.ports == null' /tmp/compose.json
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  installer-static-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run installer static/unit tests
+        run: sudo bash tests/run-tests.sh
