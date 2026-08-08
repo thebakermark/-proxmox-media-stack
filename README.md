@@ -37,7 +37,18 @@ Open **Shell** on the Proxmox host and run:
 bash <(curl -fsSL https://raw.githubusercontent.com/thebakermark/-proxmox-media-stack/main/install.sh)
 ```
 
-The bootstrap script downloads the current repository and starts VM provisioning.
+The bootstrap script downloads the current repository, creates the Ubuntu VM, then
+automatically waits for it to boot and continues setup inside the guest over SSH —
+no separate console login is required. You stay at the same terminal for the whole
+installation and are only prompted for account-specific input (the `mediaadmin`
+password, LAN/IP settings, your Proton VPN WireGuard configuration, and whether to
+run the app-wiring and verification steps).
+
+A dedicated SSH key is generated on the Proxmox host at
+`/root/.proxmox-media-stack/id_ed25519` and installed into the guest via cloud-init
+so `install.sh` can finish the job without any manual copy/paste. If the VM cannot
+be reached automatically (for example, a firewalled or isolated VLAN), the script
+prints the exact manual fallback commands instead of hanging.
 
 Defaults:
 
@@ -68,9 +79,12 @@ The `6000` value is only an example. Check `pvesm status` and never request a vi
 
 The host script allocates only a new Proxmox-managed virtual disk. It does not format physical disks.
 
-## Manual Stage 1 — create the Ubuntu VM
+## Manual step-by-step (optional)
 
-If you prefer to clone the repository first:
+Prefer to run each stage yourself, or need to recover from an interrupted automatic
+run? Clone the repository and drive it stage by stage instead of using `install.sh`.
+
+### Stage 1 — create the Ubuntu VM
 
 ```bash
 git clone https://github.com/thebakermark/-proxmox-media-stack.git
@@ -89,9 +103,13 @@ The provisioning script:
 6. Adds a Proxmox cloud-init disk.
 7. Configures the `mediaadmin` account and DHCP.
 8. Optionally allocates a separate blank virtual media disk.
-9. Starts the VM.
+9. Generates a dedicated SSH key and installs it into the guest via cloud-init.
+10. Starts the VM.
 
-## Stage 2 — install the applications inside Ubuntu
+Run standalone like this, it only creates the VM; it does not continue into the
+guest automatically (that orchestration lives in `install.sh`).
+
+### Stage 2 — install the applications inside Ubuntu
 
 Open the new VM's **Console** in Proxmox and sign in as `mediaadmin`.
 
@@ -110,13 +128,22 @@ The guest installer requires Ubuntu Server 26.04 LTS and will stop if it detects
 It will:
 
 1. Ask for the VM LAN subnet and IP.
-2. Require `/data` to be a separate mounted filesystem.
-3. Offer to format only a completely blank, explicitly selected virtual disk.
+2. Require `/data` to be a separate mounted filesystem. If a blank virtual disk was
+   provisioned by `00-create-proxmox-vm.sh --data-storage ...`, pass
+   `--auto-data-disk` to format it automatically without a manual confirmation
+   step — the installer only auto-formats a disk it can independently re-verify
+   is blank; anything else still requires an explicit, typed confirmation.
+3. Otherwise offer to format only a completely blank, explicitly selected virtual disk.
 4. Install QEMU Guest Agent.
 5. Install Docker Engine and Compose from Docker's official Ubuntu repository.
-6. Read your Proton WireGuard configuration locally.
+6. Ask for your Proton VPN WireGuard configuration — paste its contents directly
+   (finish with Ctrl-D), or point it at a `.conf` file already on the VM.
 7. Create the media/download directory structure.
 8. Start the core stack.
+
+When run through `install.sh`, all of this happens automatically over the SSH
+session it opens into the guest — steps 6 (the interactive prompts above) are the
+only place you need to type or paste anything.
 
 After installation, change qBittorrent's temporary password and run:
 
@@ -186,9 +213,28 @@ The i7-4790's Intel HD 4600 can help with older H.264 workloads but should not b
 
 The NVIDIA NVS 310 should not be used as the primary media transcoder.
 
+## Verifying stack health
+
+Run the acceptance test any time to check the whole stack — OS version, Docker,
+every core container and its healthcheck, VPN tunnel and leak test, port
+forwarding, kill-switch posture, `/data` mount and free space, permissions,
+hardlink capability (both on the host and inside the Sonarr/Radarr/qBittorrent
+containers), listening ports and the QEMU guest agent:
+
+```bash
+sudo /opt/media-stack/30-verify-stack.sh
+```
+
+It prints `PASS`/`WARN`/`FAIL` for each check and finishes with an executive
+summary — `MEDIA STACK: HEALTHY` or `MEDIA STACK: ATTENTION REQUIRED` followed by
+exactly which checks failed and how to fix them. It exits `0` when healthy and `1`
+when attention is required, so it can be wired into monitoring or a cron job.
+
 ## Updates and backups
 
-Update containers after creating an automatic configuration backup:
+Update containers after creating an automatic configuration backup. The script
+records each core service's current image, waits for the new containers to report
+healthy, and automatically rolls back to the previous images if they don't:
 
 ```bash
 sudo /opt/media-stack/40-update-stack.sh
@@ -214,4 +260,19 @@ No safe installer can manufacture these credentials or choices:
 - optional Usenet provider credentials
 - IPTV M3U/XMLTV or Xtream Codes credentials
 
-Those values are entered locally after the VM, paths, permissions and VPN containment are established.
+Those values are entered locally after the VM, paths, permissions and VPN containment are established. When installed via `install.sh`, you enter them right in that same terminal session — there is no separate console login step.
+
+## Continuous integration
+
+Every push and pull request runs `.github/workflows/validate.yml`:
+
+- Bash syntax check (`bash -n`) and ShellCheck on every script.
+- `docker compose config` validation, including assertions that qBittorrent's
+  resolved configuration is network-isolated behind Gluetun (`network_mode:
+  service:gluetun`, no independent `networks:`/`ports:`, and it waits on Gluetun's
+  healthcheck).
+- Gitleaks secret scanning across the full git history.
+- `tests/run-tests.sh`: static/unit tests for the Ubuntu checksum-manifest parsing,
+  OS-version gating, the blank-disk safety check (exercised against a real kernel
+  block device in CI, not a mock), `.env` variable consistency between
+  `compose.yml` and the installer, and the documented Compose profile list.
