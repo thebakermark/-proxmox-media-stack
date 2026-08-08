@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SOURCE_DIR
 readonly STACK_DIR="/opt/media-stack"
 readonly ENV_FILE="${STACK_DIR}/.env"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
+
+AUTO_DATA_DISK="no"
+for arg in "$@"; do
+  case "$arg" in
+    --auto-data-disk) AUTO_DATA_DISK="yes" ;;
+    *) die "Unknown option: $arg" ;;
+  esac
+done
 
 [[ ${EUID} -eq 0 ]] || die "Run with sudo: sudo ./10-install-media-stack.sh"
 [[ -r /etc/os-release ]] || die "This installer requires Ubuntu Server 26.04 LTS."
@@ -35,6 +44,42 @@ default_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if
 read -r -p "VM IP to bind application ports [${default_ip:-0.0.0.0}]: " BIND_IP
 BIND_IP="${BIND_IP:-${default_ip:-0.0.0.0}}"
 
+# TESTABLE:BEGIN — pure/read-only logic, unit tested by tests/run-tests.sh
+device_is_verified_blank() {
+  local device="$1"
+  [[ -b "$device" ]] || return 1
+  [[ "$(lsblk -dn -o TYPE "$device")" == "disk" ]] || return 1
+  lsblk -nr -o MOUNTPOINTS "$device" | grep -q '/' && return 1
+  [[ -z "$(blkid "$device" 2>/dev/null || true)" ]] || return 1
+  [[ -z "$(lsblk -n -o FSTYPE "$device" | tr -d '[:space:]')" ]] || return 1
+  return 0
+}
+
+format_and_mount_data_disk() {
+  local device="$1"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y e2fsprogs
+  mkfs.ext4 -L media-data -m 0 "$device"
+  local uuid
+  uuid="$(blkid -s UUID -o value "$device")"
+  [[ -n "$uuid" ]] || die "Unable to determine the new filesystem UUID."
+  printf 'UUID=%s /data ext4 defaults,noatime 0 2\n' "$uuid" >> /etc/fstab
+  mount "$DATA_ROOT"
+}
+
+find_sole_blank_secondary_disk() {
+  local root_source root_disk candidate candidates=() match=""
+  root_source="$(findmnt -no SOURCE / 2>/dev/null || true)"
+  root_disk="$(lsblk -no PKNAME "$root_source" 2>/dev/null || true)"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" && "$candidate" != "$root_disk" ]] && candidates+=("$candidate")
+  done < <(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}')
+  [[ "${#candidates[@]}" -eq 1 ]] || return 1
+  match="/dev/${candidates[0]}"
+  device_is_verified_blank "$match" && printf '%s' "$match"
+}
+# TESTABLE:END
+
 configure_data_mount() {
   install -d -m 0775 "$DATA_ROOT"
   if mountpoint -q "$DATA_ROOT"; then
@@ -43,27 +88,25 @@ configure_data_mount() {
   fi
 
   info "$DATA_ROOT is not a separate mounted filesystem."
+
+  if [[ "$AUTO_DATA_DISK" == "yes" ]]; then
+    local auto_device
+    if auto_device="$(find_sole_blank_secondary_disk)"; then
+      info "Automatically formatting the blank data disk provisioned by the Proxmox installer: $auto_device"
+      format_and_mount_data_disk "$auto_device"
+      return
+    fi
+    info "Could not automatically identify a single verified-blank secondary disk; falling back to manual selection."
+  fi
+
   lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL
   read -r -p "Enter a BLANK data device to format and mount (example /dev/sdb), or press Enter to stop: " DATA_DEVICE
   [[ -n "$DATA_DEVICE" ]] || die "Stopped without changing storage. Attach or mount the media data disk and rerun."
-  [[ -b "$DATA_DEVICE" ]] || die "$DATA_DEVICE is not a block device."
-  [[ "$(lsblk -dn -o TYPE "$DATA_DEVICE")" == "disk" ]] || die "Select a whole disk, not a partition."
-  if lsblk -nr -o MOUNTPOINTS "$DATA_DEVICE" | grep -q '/'; then
-    die "$DATA_DEVICE or one of its partitions is mounted. Refusing to continue."
-  fi
-  if [[ -n "$(blkid "$DATA_DEVICE" 2>/dev/null || true)" ]] || [[ "$(lsblk -n -o FSTYPE "$DATA_DEVICE" | tr -d '[:space:]')" != "" ]]; then
-    die "$DATA_DEVICE contains an existing filesystem or signature. The installer will not erase it."
-  fi
+  device_is_verified_blank "$DATA_DEVICE" || die "$DATA_DEVICE is not a whole, unmounted, signature-free block device. The installer will not erase it."
   read -r -p "Type the exact device path '$DATA_DEVICE' to authorize formatting this blank disk: " CONFIRM_DEVICE
   [[ "$CONFIRM_DEVICE" == "$DATA_DEVICE" ]] || die "Device confirmation did not match."
 
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y e2fsprogs
-  mkfs.ext4 -L media-data -m 0 "$DATA_DEVICE"
-  DATA_UUID="$(blkid -s UUID -o value "$DATA_DEVICE")"
-  [[ -n "$DATA_UUID" ]] || die "Unable to determine the new filesystem UUID."
-  printf 'UUID=%s /data ext4 defaults,noatime 0 2\n' "$DATA_UUID" >> /etc/fstab
-  mount "$DATA_ROOT"
+  format_and_mount_data_disk "$DATA_DEVICE"
 }
 
 configure_data_mount
@@ -117,13 +160,20 @@ RENDER_GID="$(getent group render | cut -d: -f3 || true)"
 RENDER_GID="${RENDER_GID:-109}"
 DISPATCHARR_SECRET_KEY="$(openssl rand -hex 32)"
 
-info "Provide a Proton VPN WireGuard configuration downloaded from your Proton account."
-read -r -p "Path to the Proton WireGuard .conf file: " PROTON_CONFIG
-[[ -r "$PROTON_CONFIG" ]] || die "Cannot read Proton configuration: $PROTON_CONFIG"
-PROTON_PRIVATE_KEY="$(awk -F' *= *' '$1=="PrivateKey" {print $2; exit}' "$PROTON_CONFIG")"
-PROTON_ADDRESSES="$(awk -F' *= *' '$1=="Address" {gsub(/ /, "", $2); print $2; exit}' "$PROTON_CONFIG")"
+info "Provide a Proton VPN WireGuard configuration downloaded from your Proton account (a P2P/port-forwarding server)."
+info "Paste its full contents below and finish with Ctrl-D on an empty line,"
+info "or type the path to a .conf file already present on this VM and press Ctrl-D."
+PROTON_INPUT="$(cat)"
+if [[ "$PROTON_INPUT" != *$'\n'* && -r "$PROTON_INPUT" ]]; then
+  PROTON_CONFIG_CONTENT="$(cat -- "$PROTON_INPUT")"
+else
+  PROTON_CONFIG_CONTENT="$PROTON_INPUT"
+fi
+PROTON_PRIVATE_KEY="$(awk -F' *= *' '$1=="PrivateKey" {print $2; exit}' <<<"$PROTON_CONFIG_CONTENT")"
+PROTON_ADDRESSES="$(awk -F' *= *' '$1=="Address" {gsub(/ /, "", $2); print $2; exit}' <<<"$PROTON_CONFIG_CONTENT")"
 [[ -n "$PROTON_PRIVATE_KEY" ]] || die "PrivateKey was not found in the Proton configuration."
 [[ -n "$PROTON_ADDRESSES" ]] || die "Address was not found in the Proton configuration."
+unset PROTON_INPUT PROTON_CONFIG_CONTENT
 
 cat > "$ENV_FILE" <<EOF
 PUID=${PUID}
