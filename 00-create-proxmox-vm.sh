@@ -24,6 +24,7 @@ CI_USER="mediaadmin"
 DATA_STORAGE=""
 DATA_DISK_GB=""
 START_VM="yes"
+SKIP_PASSWORD="no"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -47,6 +48,7 @@ Options:
   --data-storage ID      Create an empty second virtual disk on this storage
   --data-size GB         Size of the second virtual disk; requires --data-storage
   --no-start             Create but do not start the VM
+  --no-password          Skip setting a cloud-init password; key/agent access only
   -h, --help             Show this help
 
 This script never formats or wipes physical data drives. If a second data disk
@@ -55,7 +57,9 @@ is requested, it allocates a new Proxmox-managed virtual disk only.
 A dedicated SSH key is generated at /root/.proxmox-media-stack/id_ed25519 and
 installed into the guest via cloud-init so the install.sh orchestrator can
 finish setup automatically without a manual console login. The cloud-init
-password remains a valid fallback login method.
+password remains a valid fallback login method unless --no-password is given,
+in which case the SSH key (or the QEMU guest agent, if enabled) is the only
+way in — set a password later with 'qm set VMID --cipassword ...' if needed.
 EOF
 }
 
@@ -72,6 +76,7 @@ while (($#)); do
     --data-storage) DATA_STORAGE="${2:?missing data storage}"; shift 2 ;;
     --data-size) DATA_DISK_GB="${2:?missing data disk size}"; shift 2 ;;
     --no-start) START_VM="no"; shift ;;
+    --no-password) SKIP_PASSWORD="yes"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -128,13 +133,18 @@ fi
 rm -f "$CHECKSUM_FILE"
 trap - EXIT
 
-read -r -s -p "Password for Ubuntu user '${CI_USER}': " CI_PASSWORD
-printf '\n'
-[[ ${#CI_PASSWORD} -ge 12 ]] || die "Use a password of at least 12 characters."
-read -r -s -p "Repeat password: " CI_PASSWORD_CONFIRM
-printf '\n'
-[[ "$CI_PASSWORD" == "$CI_PASSWORD_CONFIRM" ]] || die "Passwords did not match."
-unset CI_PASSWORD_CONFIRM
+CI_PASSWORD=""
+if [[ "$SKIP_PASSWORD" != "yes" ]]; then
+  read -r -s -p "Password for Ubuntu user '${CI_USER}': " CI_PASSWORD
+  printf '\n'
+  [[ ${#CI_PASSWORD} -ge 12 ]] || die "Use a password of at least 12 characters."
+  read -r -s -p "Repeat password: " CI_PASSWORD_CONFIRM
+  printf '\n'
+  [[ "$CI_PASSWORD" == "$CI_PASSWORD_CONFIRM" ]] || die "Passwords did not match."
+  unset CI_PASSWORD_CONFIRM
+else
+  info "Skipping password setup (--no-password); the injected SSH key or QEMU guest agent will be the only way in."
+fi
 
 install -d -m 0700 "$STATE_DIR"
 if [[ ! -s "$SSH_KEY_PATH" ]]; then
@@ -176,7 +186,11 @@ qm set "$VMID" --scsi0 "${VM_STORAGE}:0,import-from=${IMAGE_PATH},discard=on,ssd
 qm disk resize "$VMID" scsi0 "${OS_DISK_GB}G"
 qm set "$VMID" --ide2 "${VM_STORAGE}:cloudinit"
 qm set "$VMID" --boot order=scsi0
-qm set "$VMID" --ciuser "$CI_USER" --cipassword "$CI_PASSWORD" --sshkeys "$SSH_PUB_PATH"
+if [[ "$SKIP_PASSWORD" == "yes" ]]; then
+  qm set "$VMID" --ciuser "$CI_USER" --sshkeys "$SSH_PUB_PATH"
+else
+  qm set "$VMID" --ciuser "$CI_USER" --cipassword "$CI_PASSWORD" --sshkeys "$SSH_PUB_PATH"
+fi
 qm set "$VMID" --ipconfig0 ip=dhcp
 qm set "$VMID" --ciupgrade 1
 unset CI_PASSWORD

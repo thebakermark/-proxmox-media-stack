@@ -139,8 +139,12 @@ refresh_repo() { if [[ -d "$WORK_DIR/.git" ]]; then git -C "$WORK_DIR" fetch --q
 ensure_snippet_storage() {
   install -d -m 0700 "$SNIPPET_DIR"
   local content new_content
-  content="$(pvesm config local 2>/dev/null | awk -F': ' '$1=="content"{print $2}')"
-  if [[ ",$content," != *",snippets,"* ]]; then new_content="${content:+${content},}snippets"; pvesm set local --content "$new_content" >/dev/null; fi
+  content="$(pvesh get /storage/local --output-format json 2>/dev/null \
+    | grep -oE '"content"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/')"
+  if [[ ",$content," != *",snippets,"* ]]; then
+    new_content="${content:+${content},}snippets"
+    pvesm set local --content "$new_content" >/dev/null
+  fi
 }
 yaml_indent_file() { sed 's/^/        /' "$1"; }
 
@@ -174,7 +178,7 @@ write_files:
 EOF2
   if [[ -n "$PROTON_CONFIG" ]]; then
     cat >>"$SNIPPET_FILE" <<EOF2
-      printf '\\n\\n/dev/sdb\\n/dev/sdb\\n/root/proton-wireguard.conf\\n' | /opt/proxmox-media-stack/10-install-media-stack.sh
+      printf '\\n\\n/root/proton-wireguard.conf\\n' | /opt/proxmox-media-stack/10-install-media-stack.sh --auto-data-disk
       rm -f /root/proton-wireguard.conf
   - path: /root/proton-wireguard.conf
     owner: root:root
@@ -197,7 +201,7 @@ EOF2
 
 create_vm() {
   msg_info "Creating Ubuntu 26.04 LTS VM..."
-  "$WORK_DIR/00-create-proxmox-vm.sh" --vmid "$VMID" --name "$VM_NAME" --storage "$VM_STORAGE" --bridge "$BRIDGE" --cores "$CORES" --memory "$MEMORY_MB" --os-disk "$OS_DISK_GB" --user "$CI_USER" --data-storage "$DATA_STORAGE" --data-size "$DATA_SIZE_GB" --no-start
+  "$WORK_DIR/00-create-proxmox-vm.sh" --vmid "$VMID" --name "$VM_NAME" --storage "$VM_STORAGE" --bridge "$BRIDGE" --cores "$CORES" --memory "$MEMORY_MB" --os-disk "$OS_DISK_GB" --user "$CI_USER" --data-storage "$DATA_STORAGE" --data-size "$DATA_SIZE_GB" --no-start --no-password
   msg_ok "Created Ubuntu VM $VMID"
 }
 attach_cloud_init_and_start() {
