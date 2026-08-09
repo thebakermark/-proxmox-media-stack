@@ -63,36 +63,41 @@ fi
 [[ -r "${SSH_KEY_PATH:-}" ]] || die "State file did not include a usable SSH key."
 
 info ""
-info "Waiting for VM ${VMID} to finish booting and report readiness via the QEMU guest agent..."
-info "(This can take several minutes on first boot while cloud-init configures the system.)"
+info "Waiting for VM ${VMID} to boot and get a network address..."
+info "(This can take a few minutes on first boot. qemu-guest-agent isn't installed"
+info "until later in setup, so this checks the network directly instead of waiting on it.)"
 
-agent_ready="no"
-for _ in $(seq 1 180); do
-  if qm agent "$VMID" ping >/dev/null 2>&1; then
-    agent_ready="yes"
-    break
-  fi
-  sleep 5
-done
-
-if [[ "$agent_ready" != "yes" ]]; then
-  info "Timed out waiting for the QEMU guest agent to respond after 15 minutes."
+VM_MAC="$(qm config "$VMID" | grep -oE '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | head -1)"
+if [[ -z "$VM_MAC" ]]; then
+  info "Could not determine the VM's MAC address from its configuration."
   print_manual_fallback
   exit 0
 fi
-info "Guest agent is responding."
+
+command -v nmap >/dev/null 2>&1 || {
+  info "Installing nmap (used to discover the VM's DHCP address)..."
+  apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nmap
+}
+
+BRIDGE_CIDR="$(ip -4 -o addr show "${BRIDGE:-vmbr0}" 2>/dev/null | awk '{print $4}' | head -1)"
+
+find_guest_ip() {
+  ip neigh show 2>/dev/null | grep -i "$VM_MAC" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
 
 GUEST_IP=""
 for _ in $(seq 1 60); do
-  GUEST_IP="$(qm agent "$VMID" network-get-interfaces 2>/dev/null \
-    | grep -oP '"ip-address"\s*:\s*"\K[0-9.]+' \
-    | grep -v '^127\.' | grep -v '^169\.254\.' | head -1 || true)"
+  GUEST_IP="$(find_guest_ip || true)"
+  if [[ -z "$GUEST_IP" && -n "$BRIDGE_CIDR" ]]; then
+    nmap -sn "$BRIDGE_CIDR" >/dev/null 2>&1 || true
+    GUEST_IP="$(find_guest_ip || true)"
+  fi
   [[ -n "$GUEST_IP" ]] && break
   sleep 5
 done
 
 if [[ -z "$GUEST_IP" ]]; then
-  info "Timed out waiting for the VM to report a LAN IPv4 address."
+  info "Timed out waiting for the VM to get a network address."
   print_manual_fallback
   exit 0
 fi

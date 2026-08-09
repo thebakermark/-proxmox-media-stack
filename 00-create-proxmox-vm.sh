@@ -192,7 +192,14 @@ else
   qm set "$VMID" --ciuser "$CI_USER" --cipassword "$CI_PASSWORD" --sshkeys "$SSH_PUB_PATH"
 fi
 qm set "$VMID" --ipconfig0 ip=dhcp
-qm set "$VMID" --ciupgrade 1
+# Deliberately not using --ciupgrade: it runs a full apt upgrade during
+# cloud-init's first boot, before networking or SSH are guaranteed to be
+# usable, and observed in practice to sometimes take 30-40+ minutes (or
+# longer) on modest hardware with no visible progress -- indistinguishable
+# from a hang for a non-developer watching the console. 10-install-media-
+# stack.sh already runs apt-get update before installing anything; run
+# 'sudo apt-get upgrade' yourself afterward if you want the latest patches
+# immediately.
 unset CI_PASSWORD
 
 if [[ -n "$DATA_STORAGE" ]]; then
@@ -213,6 +220,7 @@ CI_USER=${CI_USER}
 START_VM=${START_VM}
 DATA_DISK_REQUESTED=$([[ -n "$DATA_STORAGE" ]] && echo yes || echo no)
 SSH_KEY_PATH=${SSH_KEY_PATH}
+BRIDGE=${BRIDGE}
 EOF
 chmod 0600 "$STATE_FILE"
 
