@@ -156,6 +156,15 @@ for app in gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr plex
   install -d -m 0775 -o "$PUID" -g "$PGID" "$CONFIG_ROOT/$app"
 done
 
+# jellyfin and audiobookshelf mount nested subdirectories, not their app
+# root, and jellyfin runs as an explicit non-root user (unlike the other
+# lsio images, which self-chown via PUID/PGID at container startup) -- if
+# these aren't pre-created with the right owner, Docker auto-creates them
+# as root on first `up`, and jellyfin fails to write its own log directory.
+for path in jellyfin/config jellyfin/cache audiobookshelf/config audiobookshelf/metadata; do
+  install -d -m 0775 -o "$PUID" -g "$PGID" "$CONFIG_ROOT/$path"
+done
+
 RENDER_GID="$(getent group render | cut -d: -f3 || true)"
 RENDER_GID="${RENDER_GID:-109}"
 DISPATCHARR_SECRET_KEY="$(openssl rand -hex 32)"
@@ -169,8 +178,11 @@ if [[ "$PROTON_INPUT" != *$'\n'* && -r "$PROTON_INPUT" ]]; then
 else
   PROTON_CONFIG_CONTENT="$PROTON_INPUT"
 fi
-PROTON_PRIVATE_KEY="$(awk -F' *= *' '$1=="PrivateKey" {print $2; exit}' <<<"$PROTON_CONFIG_CONTENT")"
-PROTON_ADDRESSES="$(awk -F' *= *' '$1=="Address" {gsub(/ /, "", $2); print $2; exit}' <<<"$PROTON_CONFIG_CONTENT")"
+PROTON_CONFIG_CONTENT="$(tr -d '\r' <<<"$PROTON_CONFIG_CONTENT")"
+# Split only on the FIRST '=': a WireGuard private key is base64 and always
+# ends in '=' padding, which a naive "split on every =" parse would truncate.
+PROTON_PRIVATE_KEY="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_CONFIG_CONTENT" | head -1 | sed -E 's/[[:space:]]+$//')"
+PROTON_ADDRESSES="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_CONFIG_CONTENT" | head -1 | tr -d ' ')"
 [[ -n "$PROTON_PRIVATE_KEY" ]] || die "PrivateKey was not found in the Proton configuration."
 [[ -n "$PROTON_ADDRESSES" ]] || die "Address was not found in the Proton configuration."
 unset PROTON_INPUT PROTON_CONFIG_CONTENT
@@ -186,7 +198,7 @@ CONFIG_ROOT=${CONFIG_ROOT}
 RENDER_GID=${RENDER_GID}
 PROTON_WIREGUARD_PRIVATE_KEY=${PROTON_PRIVATE_KEY}
 PROTON_WIREGUARD_ADDRESSES=${PROTON_ADDRESSES}
-PROTON_SERVER_COUNTRIES=${PROTON_COUNTRIES}
+PROTON_SERVER_COUNTRIES="${PROTON_COUNTRIES}"
 DISPATCHARR_SECRET_KEY=${DISPATCHARR_SECRET_KEY}
 PLEX_CLAIM=
 COMPOSE_PROFILES=

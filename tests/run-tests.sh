@@ -175,12 +175,55 @@ test_vpn_isolation_static() {
   fi
 }
 
+# --- 7. Proton WireGuard config parsing does not truncate base64 padding -----
+# A previous version split on every '=' in the line, which silently truncated
+# the trailing '=' padding character that (almost) every WireGuard base64
+# private key ends with, producing an invalid 43-character key that gluetun
+# rejected outright ("illegal base64 data"). This must never regress.
+test_proton_key_parsing() {
+  local name="Proton config parsing preserves base64 '=' padding in PrivateKey"
+  for canary in \
+    "sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p'" \
+    "sed -n 's/^Address[[:space:]]*=[[:space:]]*//p'"; do
+    if ! grep -qF "$canary" "$REPO_DIR/10-install-media-stack.sh"; then
+      not_ok "$name" "expected extraction expression not found in 10-install-media-stack.sh: $canary; update this test to match"
+      return
+    fi
+  done
+
+  local content key addr
+  content='[Interface]
+PrivateKey = UHXRaw5+PKvt4vjIfviVsy0yiJLQOSABtTh9Q3eTkVM=
+Address = 10.2.0.2/32, 2a07:b944::2:2/128
+DNS = 10.2.0.1, 2a07:b944::2:1
+
+[Peer]
+PublicKey = abcDEF123uvwXYZ789+/=
+Endpoint = 1.2.3.4:51820
+'
+  key="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | sed -E 's/[[:space:]]+$//')"
+  addr="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | tr -d ' ')"
+
+  if [[ "$key" == "UHXRaw5+PKvt4vjIfviVsy0yiJLQOSABtTh9Q3eTkVM=" && "${#key}" -eq 44 ]]; then
+    ok "$name"
+  else
+    not_ok "$name" "expected a 44-char key ending in '=', got '$key' (${#key} chars)"
+  fi
+
+  if [[ "$addr" == "10.2.0.2/32,2a07:b944::2:2/128" ]]; then
+    ok "Proton config parsing (Address extracted correctly)"
+  else
+    not_ok "Proton config parsing (Address extracted correctly)" "got '$addr'"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
 test_required_env_vars
 test_compose_profiles
 test_vpn_isolation_static
+test_proton_key_parsing
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then
