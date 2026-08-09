@@ -141,6 +141,13 @@ install -m 0755 "$SOURCE_DIR/30-verify-stack.sh" "$STACK_DIR/30-verify-stack.sh"
 install -m 0755 "$SOURCE_DIR/40-update-stack.sh" "$STACK_DIR/40-update-stack.sh"
 install -m 0755 "$SOURCE_DIR/50-backup-stack.sh" "$STACK_DIR/50-backup-stack.sh"
 
+# `install -d -o -g` only sets ownership on the final directory it creates,
+# not on any parent directories it auto-creates along the way -- create the
+# top-level tree explicitly first so nothing is left root-owned.
+for path in torrents media usenet usenet/complete recordings; do
+  install -d -m 0775 -o "$PUID" -g "$PGID" "$DATA_ROOT/$path"
+done
+
 for path in \
   torrents/movies torrents/tv torrents/music torrents/books \
   usenet/incomplete usenet/complete/movies usenet/complete/tv usenet/complete/music usenet/complete/books \
