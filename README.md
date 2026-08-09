@@ -145,14 +145,22 @@ When run through `install.sh`, all of this happens automatically over the SSH
 session it opens into the guest — steps 6 (the interactive prompts above) are the
 only place you need to type or paste anything.
 
-After installation, change qBittorrent's temporary password and run:
+qBittorrent's WebUI password is generated automatically during install (a machine
+credential for internal API calls, printed at the end of `10-install-media-stack.sh`
+and saved in `.env`) — no need to change it before continuing. Then run:
 
 ```bash
 sudo /opt/media-stack/20-wire-arr-apps.sh
 sudo /opt/media-stack/30-verify-stack.sh
 ```
 
-The wiring script gives Sonarr and Radarr a consistent `/data` view and connects them to qBittorrent through Gluetun. The verification script confirms that the host and torrent network have different public IPs and that hardlinks work.
+The wiring script gives Sonarr and Radarr a consistent `/data` view; connects them
+to qBittorrent through Gluetun; enables hardlink imports and automatic file renaming
+in both; connects Bazarr to both; and, once Seerr has completed its own setup
+(Settings → connect it to Jellyfin, which needs your admin login), reminds you where
+to add Sonarr/Radarr in Seerr — Seerr has no service-account API key, only an admin
+session, so that one connection stays manual. The verification script confirms the
+host and torrent network have different public IPs and that hardlinks work.
 
 ## Application addresses
 
@@ -256,6 +264,7 @@ No safe installer can manufacture these credentials or choices:
 - legal torrent/indexer accounts
 - subtitle-provider credentials
 - Jellyfin administrator account
+- Seerr's connection to Jellyfin and to Sonarr/Radarr (needs Seerr's own admin login)
 - optional Plex claim token
 - optional Usenet provider credentials
 - IPTV M3U/XMLTV or Xtream Codes credentials
