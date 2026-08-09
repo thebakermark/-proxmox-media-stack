@@ -2,12 +2,22 @@
 set -Eeuo pipefail
 
 readonly STACK_DIR="/opt/media-stack"
+readonly ENV_FILE="${STACK_DIR}/.env"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
 [[ ${EUID} -eq 0 ]] || die "Run with sudo."
 command -v jq >/dev/null || die "jq is required."
+[[ -r "$ENV_FILE" ]] || die "$ENV_FILE is missing. Run 10-install-media-stack.sh first."
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+
+# Docker only listens on the exact address a port was published on. If
+# BIND_IP is a specific interface (the installer's own suggested default,
+# not 0.0.0.0), 127.0.0.1 is a *different* address and connections to it
+# are refused -- use the same host the apps were actually published on.
+readonly LOCAL_HOST="${BIND_IP:-127.0.0.1}"
 
 read_api_key() {
   local config_file="$1"
@@ -71,7 +81,7 @@ ensure_qbittorrent() {
 
 ensure_prowlarr_application() {
   local name="$1" implementation="$2" app_url="$3" app_key="$4"
-  local prowlarr_base="http://127.0.0.1:9696"
+  local prowlarr_base="http://${LOCAL_HOST}:9696"
   if curl -fsS -H "X-Api-Key: $PROWLARR_KEY" "$prowlarr_base/api/v1/applications" | jq -e --arg name "$name" '.[] | select(.name == $name)' >/dev/null; then
     info "Prowlarr is already connected to $name."
     return
@@ -97,15 +107,15 @@ ensure_prowlarr_application() {
   info "Connected Prowlarr to $name."
 }
 
-ensure_root_folder "http://127.0.0.1:8989" "$SONARR_KEY" "/data/media/tv"
-ensure_root_folder "http://127.0.0.1:7878" "$RADARR_KEY" "/data/media/movies"
+ensure_root_folder "http://${LOCAL_HOST}:8989" "$SONARR_KEY" "/data/media/tv"
+ensure_root_folder "http://${LOCAL_HOST}:7878" "$RADARR_KEY" "/data/media/movies"
 read -r -p "qBittorrent username [admin]: " QBIT_USER
 QBIT_USER="${QBIT_USER:-admin}"
 read -r -s -p "qBittorrent password (the permanent password you just set): " QBIT_PASSWORD
 printf '\n'
 [[ -n "$QBIT_PASSWORD" ]] || die "qBittorrent password cannot be blank."
-ensure_qbittorrent Sonarr "http://127.0.0.1:8989" "$SONARR_KEY" tvCategory tv "$QBIT_USER" "$QBIT_PASSWORD"
-ensure_qbittorrent Radarr "http://127.0.0.1:7878" "$RADARR_KEY" movieCategory movies "$QBIT_USER" "$QBIT_PASSWORD"
+ensure_qbittorrent Sonarr "http://${LOCAL_HOST}:8989" "$SONARR_KEY" tvCategory tv "$QBIT_USER" "$QBIT_PASSWORD"
+ensure_qbittorrent Radarr "http://${LOCAL_HOST}:7878" "$RADARR_KEY" movieCategory movies "$QBIT_USER" "$QBIT_PASSWORD"
 unset QBIT_PASSWORD
 
 PROWLARR_KEY="$(wait_for_key Prowlarr "$STACK_DIR/config/prowlarr/config.xml")"
