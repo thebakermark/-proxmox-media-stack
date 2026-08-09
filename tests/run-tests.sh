@@ -198,7 +198,7 @@ test_proton_key_parsing() {
 
   local content key addr
   content='[Interface]
-PrivateKey = UHXRaw5+PKvt4vjIfviVsy0yiJLQOSABtTh9Q3eTkVM=
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 Address = 10.2.0.2/32, 2a07:b944::2:2/128
 DNS = 10.2.0.1, 2a07:b944::2:1
 
@@ -209,7 +209,7 @@ Endpoint = 1.2.3.4:51820
   key="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | sed -E 's/[[:space:]]+$//')"
   addr="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | cut -d',' -f1 | tr -d ' ')"
 
-  if [[ "$key" == "UHXRaw5+PKvt4vjIfviVsy0yiJLQOSABtTh9Q3eTkVM=" && "${#key}" -eq 44 ]]; then
+  if [[ "$key" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" && "${#key}" -eq 44 ]]; then
     ok "$name"
   else
     not_ok "$name" "expected a 44-char key ending in '=', got '$key' (${#key} chars)"
