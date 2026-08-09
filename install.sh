@@ -82,18 +82,24 @@ command -v nmap >/dev/null 2>&1 || {
 BRIDGE_CIDR="$(ip -4 -o addr show "${BRIDGE:-vmbr0}" 2>/dev/null | awk '{print $4}' | head -1)"
 
 find_guest_ip() {
-  ip neigh show 2>/dev/null | grep -i "$VM_MAC" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1
+  # nmap's ping-sweep discovers hosts via its own raw ARP capture; it does
+  # not reliably populate the kernel's neighbor table as a side effect, so
+  # parse nmap's own output directly rather than checking `ip neigh` after.
+  if [[ -n "$BRIDGE_CIDR" ]]; then
+    nmap -sn "$BRIDGE_CIDR" 2>/dev/null | awk -v mac="$VM_MAC" '
+      /^Nmap scan report for / { ip = $NF; gsub(/[()]/, "", ip) }
+      tolower($0) ~ ("mac address: " tolower(mac)) { print ip; exit }
+    '
+  fi
 }
 
 GUEST_IP=""
 for _ in $(seq 1 60); do
   GUEST_IP="$(find_guest_ip || true)"
-  if [[ -z "$GUEST_IP" && -n "$BRIDGE_CIDR" ]]; then
-    nmap -sn "$BRIDGE_CIDR" >/dev/null 2>&1 || true
-    GUEST_IP="$(find_guest_ip || true)"
-  fi
   [[ -n "$GUEST_IP" ]] && break
-  sleep 5
+  # each nmap sweep above already takes ~15-20s on a typical /24; a short
+  # extra sleep is enough buffer without needlessly stretching the total wait
+  sleep 2
 done
 
 if [[ -z "$GUEST_IP" ]]; then
