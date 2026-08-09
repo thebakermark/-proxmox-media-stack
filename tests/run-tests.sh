@@ -222,6 +222,35 @@ Endpoint = 1.2.3.4:51820
   fi
 }
 
+# --- 8. qBittorrent WebUI password hash matches qBittorrent's own algorithm -
+# Verified against a publicly documented reference hash (password
+# "adminadmin") from qBittorrent's own PBKDF2-SHA512 implementation
+# (src/base/utils/password.cpp: 100000 iterations, 64-byte output). Wrong
+# iteration count, digest, or key length silently locks the generated
+# credential out with no useful error, so this must never regress.
+test_qbittorrent_password_hash() {
+  local name="qBittorrent PBKDF2 hash generation matches qBittorrent's own algorithm"
+  local canary="pbkdf2_hmac('sha512', sys.argv[1].encode(), salt, 100000, dklen=64)"
+  if ! grep -qF "$canary" "$REPO_DIR/10-install-media-stack.sh"; then
+    not_ok "$name" "expected PBKDF2 call not found in 10-install-media-stack.sh: $canary; update this test to match"
+    return
+  fi
+  command -v python3 >/dev/null || { printf 'skip - %s: python3 not available\n' "$name"; return; }
+
+  local result
+  result="$(python3 -c "
+import hashlib, base64
+salt = base64.b64decode('ARQ77eY1NUZaQsuDHbIMCA==')
+derived = hashlib.pbkdf2_hmac('sha512', b'adminadmin', salt, 100000, dklen=64)
+print(base64.b64encode(derived).decode())
+")"
+  if [[ "$result" == "0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==" ]]; then
+    ok "$name"
+  else
+    not_ok "$name" "got '$result'"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
@@ -229,6 +258,7 @@ test_required_env_vars
 test_compose_profiles
 test_vpn_isolation_static
 test_proton_key_parsing
+test_qbittorrent_password_hash
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then

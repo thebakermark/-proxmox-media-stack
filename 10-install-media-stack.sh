@@ -198,6 +198,25 @@ PROTON_ADDRESSES="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_
 [[ -n "$PROTON_ADDRESSES" ]] || die "Address was not found in the Proton configuration."
 unset PROTON_INPUT PROTON_CONFIG_CONTENT
 
+command -v python3 >/dev/null || die "python3 is required to generate the qBittorrent WebUI credential."
+
+# qBittorrent's WebUI has no unattended-setup mode -- without a password
+# already present in its config at first start, it generates a one-time
+# temporary password that changes on every restart, unusable for the
+# Sonarr/Radarr download-client wiring in 20-wire-arr-apps.sh. Generate a
+# real one ourselves (machine credential for internal API auth, the same
+# category as DISPATCHARR_SECRET_KEY below, not a personal login) and
+# pre-seed qBittorrent's own PBKDF2-SHA512 hash format so it's already set
+# on first boot. Algorithm and on-disk format verified against qBittorrent's
+# own source (src/base/utils/password.cpp) and a known-good reference hash.
+QBIT_PASSWORD="$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 24)"
+QBIT_PASSWORD_HASH="$(python3 -c "
+import sys, os, hashlib, base64
+salt = os.urandom(16)
+derived = hashlib.pbkdf2_hmac('sha512', sys.argv[1].encode(), salt, 100000, dklen=64)
+print(base64.b64encode(salt).decode() + ':' + base64.b64encode(derived).decode())
+" "$QBIT_PASSWORD")"
+
 cat > "$ENV_FILE" <<EOF
 PUID=${PUID}
 PGID=${PGID}
@@ -211,6 +230,8 @@ PROTON_WIREGUARD_PRIVATE_KEY=${PROTON_PRIVATE_KEY}
 PROTON_WIREGUARD_ADDRESSES=${PROTON_ADDRESSES}
 PROTON_SERVER_COUNTRIES="${PROTON_COUNTRIES}"
 DISPATCHARR_SECRET_KEY=${DISPATCHARR_SECRET_KEY}
+QBIT_USERNAME=admin
+QBIT_PASSWORD=${QBIT_PASSWORD}
 PLEX_CLAIM=
 COMPOSE_PROFILES=
 EOF
@@ -218,18 +239,21 @@ chmod 0600 "$ENV_FILE"
 unset PROTON_PRIVATE_KEY
 
 install -d -m 0775 -o "$PUID" -g "$PGID" "$CONFIG_ROOT/qbittorrent/qBittorrent"
-cat > "$CONFIG_ROOT/qbittorrent/qBittorrent/qBittorrent.conf" <<'EOF'
+cat > "$CONFIG_ROOT/qbittorrent/qBittorrent/qBittorrent.conf" <<EOF
 [Preferences]
 Downloads\SavePath=/data/torrents/
 WebUI\Address=*
 WebUI\LocalHostAuth=false
 WebUI\Port=8080
 WebUI\ServerDomains=*
+WebUI\Username=admin
+WebUI\Password_PBKDF2="@ByteArray(${QBIT_PASSWORD_HASH})"
 Connection\UPnP=false
 Connection\RandomPort=false
 EOF
 chown "$PUID:$PGID" "$CONFIG_ROOT/qbittorrent/qBittorrent/qBittorrent.conf"
 chmod 0660 "$CONFIG_ROOT/qbittorrent/qBittorrent/qBittorrent.conf"
+unset QBIT_PASSWORD_HASH
 
 COMPOSE_ARGS=(-f "$STACK_DIR/compose.yml")
 if [[ -e /dev/dri/renderD128 ]]; then
@@ -244,9 +268,6 @@ docker compose "${COMPOSE_ARGS[@]}" config --quiet
 docker compose "${COMPOSE_ARGS[@]}" pull
 docker compose "${COMPOSE_ARGS[@]}" up -d
 
-sleep 8
-QBIT_PASSWORD="$(docker logs qbittorrent 2>&1 | sed -n 's/.*temporary password is provided for this session: //p' | tail -1 || true)"
-
 chown -R "$PUID:$PGID" "$CONFIG_ROOT"
 info "Core media stack installation is complete."
 info "Jellyfin:    http://${BIND_IP}:8096"
@@ -255,12 +276,10 @@ info "Sonarr:      http://${BIND_IP}:8989"
 info "Radarr:      http://${BIND_IP}:7878"
 info "Prowlarr:    http://${BIND_IP}:9696"
 info "Bazarr:      http://${BIND_IP}:6767"
-info "qBittorrent: http://${BIND_IP}:8080 (username: admin)"
+info "qBittorrent: http://${BIND_IP}:8080 (username: admin, password: $QBIT_PASSWORD)"
+info "That qBittorrent password is a generated machine credential (also saved in ${ENV_FILE},"
+info "root-only). Change it in qBittorrent's WebUI if you'd rather choose your own."
 info "Optional IPTV: set COMPOSE_PROFILES=iptv in ${ENV_FILE}, then run docker compose up -d"
-if [[ -n "$QBIT_PASSWORD" ]]; then
-  info "qBittorrent temporary password: $QBIT_PASSWORD"
-else
-  info "Get the qBittorrent temporary password with: docker logs qbittorrent"
-fi
-info "Change the qBittorrent password immediately, then run: sudo ${STACK_DIR}/20-wire-arr-apps.sh"
-info "Finally verify VPN containment with: sudo ${STACK_DIR}/30-verify-stack.sh"
+info "Next: sudo ${STACK_DIR}/20-wire-arr-apps.sh"
+info "Then: sudo ${STACK_DIR}/30-verify-stack.sh"
+unset QBIT_PASSWORD
