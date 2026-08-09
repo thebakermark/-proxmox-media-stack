@@ -175,16 +175,21 @@ test_vpn_isolation_static() {
   fi
 }
 
-# --- 7. Proton WireGuard config parsing does not truncate base64 padding -----
-# A previous version split on every '=' in the line, which silently truncated
-# the trailing '=' padding character that (almost) every WireGuard base64
-# private key ends with, producing an invalid 43-character key that gluetun
-# rejected outright ("illegal base64 data"). This must never regress.
+# --- 7. Proton WireGuard config parsing: padding + IPv4-only Address --------
+# Two regressions caught by actually running this against a real Proton
+# config: (a) a previous version split on every '=' in the line, silently
+# truncating the trailing '=' padding character that (almost) every
+# WireGuard base64 private key ends with, producing an invalid 43-character
+# key gluetun rejected outright ("illegal base64 data"); (b) Proton's
+# Address field is IPv4,IPv6 comma-separated, and gluetun rejects the
+# interface outright if an IPv6 address is present -- this stack is
+# IPv4-only, so only the first address must be kept. Neither must regress.
 test_proton_key_parsing() {
   local name="Proton config parsing preserves base64 '=' padding in PrivateKey"
   for canary in \
     "sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p'" \
-    "sed -n 's/^Address[[:space:]]*=[[:space:]]*//p'"; do
+    "sed -n 's/^Address[[:space:]]*=[[:space:]]*//p'" \
+    "cut -d',' -f1"; do
     if ! grep -qF "$canary" "$REPO_DIR/10-install-media-stack.sh"; then
       not_ok "$name" "expected extraction expression not found in 10-install-media-stack.sh: $canary; update this test to match"
       return
@@ -202,7 +207,7 @@ PublicKey = abcDEF123uvwXYZ789+/=
 Endpoint = 1.2.3.4:51820
 '
   key="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | sed -E 's/[[:space:]]+$//')"
-  addr="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | tr -d ' ')"
+  addr="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$content" | head -1 | cut -d',' -f1 | tr -d ' ')"
 
   if [[ "$key" == "UHXRaw5+PKvt4vjIfviVsy0yiJLQOSABtTh9Q3eTkVM=" && "${#key}" -eq 44 ]]; then
     ok "$name"
@@ -210,10 +215,10 @@ Endpoint = 1.2.3.4:51820
     not_ok "$name" "expected a 44-char key ending in '=', got '$key' (${#key} chars)"
   fi
 
-  if [[ "$addr" == "10.2.0.2/32,2a07:b944::2:2/128" ]]; then
-    ok "Proton config parsing (Address extracted correctly)"
+  if [[ "$addr" == "10.2.0.2/32" ]]; then
+    ok "Proton config parsing (Address extracted as IPv4-only)"
   else
-    not_ok "Proton config parsing (Address extracted correctly)" "got '$addr'"
+    not_ok "Proton config parsing (Address extracted as IPv4-only)" "got '$addr', expected IPv6 stripped"
   fi
 }
 

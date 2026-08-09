@@ -189,7 +189,11 @@ PROTON_CONFIG_CONTENT="$(tr -d '\r' <<<"$PROTON_CONFIG_CONTENT")"
 # Split only on the FIRST '=': a WireGuard private key is base64 and always
 # ends in '=' padding, which a naive "split on every =" parse would truncate.
 PROTON_PRIVATE_KEY="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_CONFIG_CONTENT" | head -1 | sed -E 's/[[:space:]]+$//')"
-PROTON_ADDRESSES="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_CONFIG_CONTENT" | head -1 | tr -d ' ')"
+# Proton's config lists IPv4 and IPv6 comma-separated; gluetun rejects the
+# WireGuard interface outright if an IPv6 address is present without IPv6
+# separately enabled, and this stack doesn't use IPv6 anywhere -- keep only
+# the first (IPv4) address.
+PROTON_ADDRESSES="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_CONFIG_CONTENT" | head -1 | cut -d',' -f1 | tr -d ' ')"
 [[ -n "$PROTON_PRIVATE_KEY" ]] || die "PrivateKey was not found in the Proton configuration."
 [[ -n "$PROTON_ADDRESSES" ]] || die "Address was not found in the Proton configuration."
 unset PROTON_INPUT PROTON_CONFIG_CONTENT
