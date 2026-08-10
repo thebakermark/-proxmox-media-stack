@@ -185,8 +185,11 @@ generated password, saved as `APP_ADMIN_PASSWORD` in `.env` — retrieve it with
 `sudo grep APP_ADMIN_PASSWORD /opt/media-stack/.env`. Sonarr, Radarr and Prowlarr
 only require that login from *outside* the LAN (`disabledForLocalAddresses`), so
 browsing to them from your own network stays password-free; Bazarr has no
-equivalent local-address bypass, so it always prompts. Re-running the script is
-idempotent and leaves an already-configured app alone.
+equivalent local-address bypass, so it always prompts. qBittorrent gets the same
+treatment through its own WebUI setting (`bypass_auth_subnet_whitelist`) using the
+LAN subnet you gave the installer — login is required from outside that subnet,
+never from it. Re-running the script is idempotent and leaves an already-configured
+app alone.
 
 If the `music` profile is enabled, it also connects **[Aurral](https://aurral.org/)**
 to Lidarr — a music discovery companion picked over AI-driven alternatives

@@ -584,6 +584,36 @@ test_wire_aurral_guards() {
   fi
 }
 
+# --- 16. qBittorrent gets the same LAN-login-bypass treatment as the other
+# Servarr apps
+# Caught from real use, not a design review: qBittorrent already had its
+# own login (set up during install) but never got the "disabled for local
+# addresses" treatment Sonarr/Radarr/Prowlarr already have, so browsing it
+# from the LAN kept prompting for a login. qBittorrent supports the same
+# idea natively (bypass_auth_subnet_whitelist*), just via its own WebUI
+# API rather than the *arr apps' REST config endpoint.
+test_qbittorrent_lan_bypass() {
+  local name="qBittorrent gets a LAN login bypass like the other Servarr apps"
+
+  if grep -qF 'secure_qbittorrent_lan_bypass "$QBIT_USER" "$QBIT_PASSWORD"' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (wired into the main flow while QBIT_PASSWORD is still in scope)"
+  else
+    not_ok "$name (wired into the main flow while QBIT_PASSWORD is still in scope)" "expected a call to secure_qbittorrent_lan_bypass before QBIT_PASSWORD is unset"
+  fi
+
+  if grep -qF 'bypass_auth_subnet_whitelist_enabled: true, bypass_auth_subnet_whitelist: $subnet' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (sets qBittorrent's own subnet-whitelist preference)"
+  else
+    not_ok "$name (sets qBittorrent's own subnet-whitelist preference)" "expected bypass_auth_subnet_whitelist_enabled/bypass_auth_subnet_whitelist in the setPreferences payload"
+  fi
+
+  if grep -qF 'if [[ -z "${LAN_SUBNET:-}" ]]; then' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (skips rather than setting an empty/undefined whitelist)"
+  else
+    not_ok "$name (skips rather than setting an empty/undefined whitelist)" "expected a guard on LAN_SUBNET being unset -- an empty whitelist value must not be sent"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
@@ -600,6 +630,7 @@ test_hubarr_dashboard_config
 test_hubarr_key_lookup_guards
 test_aurral_profile_and_dependency
 test_wire_aurral_guards
+test_qbittorrent_lan_bypass
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then

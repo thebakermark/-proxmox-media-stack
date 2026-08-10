@@ -209,6 +209,44 @@ with open(path, 'w') as f:
   fi
 }
 
+# qBittorrent already has its own login (set up during install), but unlike
+# Sonarr/Radarr/Prowlarr it never got the matching "disabled for local
+# addresses" treatment -- caught from real use: repeated logins just
+# browsing it from the LAN. qBittorrent supports the same idea natively,
+# under its own WebUI API rather than a REST config endpoint.
+secure_qbittorrent_lan_bypass() {
+  local qbit_user="$1" qbit_password="$2"
+  if [[ -z "${LAN_SUBNET:-}" ]]; then
+    info "qBittorrent: no LAN_SUBNET saved in .env; skipping the local-network login bypass."
+    return
+  fi
+  local base="http://${LOCAL_HOST}:8080"
+  local cookie_jar
+  cookie_jar="$(mktemp)"
+  curl -fsS -c "$cookie_jar" -X POST --data-urlencode "username=$qbit_user" \
+    --data-urlencode "password=$qbit_password" "$base/api/v2/auth/login" >/dev/null 2>&1 || true
+  if [[ ! -s "$cookie_jar" ]]; then
+    info "qBittorrent: could not log in to configure LAN access; leave it for the UI."
+    rm -f "$cookie_jar"
+    return
+  fi
+
+  local enabled
+  enabled="$(curl -sS -b "$cookie_jar" "$base/api/v2/app/preferences" 2>/dev/null \
+    | jq -r '.bypass_auth_subnet_whitelist_enabled // false' 2>/dev/null || true)"
+  if [[ "$enabled" == "true" ]]; then
+    info "qBittorrent: LAN access already bypasses login."
+  else
+    local payload
+    payload="$(jq -nc --arg subnet "$LAN_SUBNET" \
+      '{bypass_auth_subnet_whitelist_enabled: true, bypass_auth_subnet_whitelist: $subnet}')"
+    curl -sS -b "$cookie_jar" -X POST --data-urlencode "json=$payload" \
+      "$base/api/v2/app/setPreferences" >/dev/null 2>&1 || true
+    info "qBittorrent: login no longer required from $LAN_SUBNET; still required remotely."
+  fi
+  rm -f "$cookie_jar"
+}
+
 # Jellyfin's admin account is a machine credential in the same sense as
 # QBIT_PASSWORD above -- auto-generated, saved in .env, printed for you to
 # change later if you want a memorable password. This is what actually lets
@@ -614,6 +652,7 @@ if [[ -z "${QBIT_PASSWORD:-}" ]]; then
 fi
 ensure_qbittorrent Sonarr "http://${LOCAL_HOST}:8989" "$SONARR_KEY" tvCategory tv "$QBIT_USER" "$QBIT_PASSWORD"
 ensure_qbittorrent Radarr "http://${LOCAL_HOST}:7878" "$RADARR_KEY" movieCategory movies "$QBIT_USER" "$QBIT_PASSWORD"
+secure_qbittorrent_lan_bypass "$QBIT_USER" "$QBIT_PASSWORD"
 # Hubarr's qBittorrent widget (wired up much later below, after Jellyfin/
 # Seerr) needs this too -- keep one copy under its own name rather than
 # delaying the unset below, which exists specifically to stop carrying the
