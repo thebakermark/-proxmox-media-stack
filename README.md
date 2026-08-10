@@ -10,7 +10,7 @@ Core applications:
 - Automatic Proton VPN port forwarding into qBittorrent
 - Hubarr — a single dashboard with live status for every app above
 - Optional Plex and Tautulli
-- Optional Lidarr, Audiobookshelf, SABnzbd and Recyclarr
+- Optional Lidarr with Aurral for AI-free music discovery, Audiobookshelf, SABnzbd and Recyclarr
 - Optional Dozzle and Uptime Kuma
 - Optional Dispatcharr IPTV/EPG manager and virtual tuner
 - Optional Tunarr channels built from the Jellyfin library
@@ -188,6 +188,15 @@ browsing to them from your own network stays password-free; Bazarr has no
 equivalent local-address bypass, so it always prompts. Re-running the script is
 idempotent and leaves an already-configured app alone.
 
+If the `music` profile is enabled, it also connects **[Aurral](https://aurral.org/)**
+to Lidarr — a music discovery companion picked over AI-driven alternatives
+(Digarr, Mixarr) specifically because it needs no LLM provider or per-request
+cost; recommendations come from Last.fm/ListenBrainz/tags instead. One call
+creates Aurral's admin account (username `aurraladmin`, the same shared
+password as Sonarr/Radarr/Prowlarr/Bazarr) and connects it to Lidarr together —
+also LAN-password-free, remote-only, matching every other app here. Skipped
+entirely if `music` isn't in `COMPOSE_PROFILES`.
+
 Finally, it configures **Hubarr** — this stack's control-center dashboard (the
 [gethomepage/homepage](https://github.com/gethomepage/homepage) project) — with a
 live tile for every app above. It doesn't need a new account of its own: each tile
@@ -235,7 +244,7 @@ Edit `/opt/media-stack/.env` and set `COMPOSE_PROFILES` to a comma-separated lis
 Available profiles:
 
 - `plex` — Plex and Tautulli
-- `music` — Lidarr
+- `music` — Lidarr with Aurral for music discovery
 - `books` — Audiobookshelf
 - `usenet` — SABnzbd
 - `automation` — Recyclarr

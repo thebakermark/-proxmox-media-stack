@@ -514,6 +514,76 @@ test_hubarr_key_lookup_guards() {
   fi
 }
 
+# --- 14. Aurral (music discovery) ships behind the existing "music" profile,
+# alongside Lidarr, not as a new always-on service
+# Picked over Digarr/Mixarr specifically because it needs no AI/LLM
+# provider or per-request API cost -- verified here so that choice doesn't
+# silently regress if the wiring is ever touched again.
+test_aurral_profile_and_dependency() {
+  local name="Aurral ships under the music profile, depending on Lidarr"
+
+  local block
+  block="$(awk '/^  aurral:/{flag=1} /^  [a-z]/{if ($0 !~ /^  aurral:/ && flag) exit} flag' "$REPO_DIR/compose.yml")"
+  if [[ -z "$block" ]]; then
+    not_ok "$name (aurral service defined)" "compose.yml does not define an 'aurral:' service"
+    return
+  fi
+  ok "$name (aurral service defined)"
+
+  if grep -qF 'profiles: ["music"]' <<<"$block"; then
+    ok "$name (gated behind the music profile, same as lidarr)"
+  else
+    not_ok "$name (gated behind the music profile, same as lidarr)" "aurral must not be an always-on core service -- it's meaningless without Lidarr, which is itself opt-in"
+  fi
+
+  if grep -qE '^\s+depends_on:' <<<"$block" && grep -qF -- '- lidarr' <<<"$block"; then
+    ok "$name (depends_on lidarr for startup ordering)"
+  else
+    not_ok "$name (depends_on lidarr for startup ordering)" "expected a depends_on: [lidarr] entry in the aurral service block"
+  fi
+
+  if grep -qE 'for app in [^;]*\baurral\b' "$REPO_DIR/10-install-media-stack.sh"; then
+    ok "$name (config directory pre-created by the installer)"
+  else
+    not_ok "$name (config directory pre-created by the installer)" "expected 'aurral' in 10-install-media-stack.sh's CONFIG_ROOT pre-creation loop"
+  fi
+}
+
+# --- 15. wire_aurral() is profile-gated and its network calls degrade
+# gracefully instead of crashing or hanging the whole script
+# Ground-truthed against Aurral's own onboarding route source (its docs
+# don't publish a request schema): POST /api/onboarding/complete creates
+# the admin account and connects Lidarr in one call. All the same failure
+# classes already fixed elsewhere in this script apply here too -- verify
+# they were guarded against from the start rather than caught live again.
+test_wire_aurral_guards() {
+  local name="wire_aurral() is profile-gated and fails gracefully, not loudly"
+
+  if grep -qF '[[ ",${COMPOSE_PROFILES:-}," == *,music,* ]] || return' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (skips entirely when the music profile/Lidarr isn't enabled)"
+  else
+    not_ok "$name (skips entirely when the music profile/Lidarr isn't enabled)" "expected an early return guarding on COMPOSE_PROFILES containing 'music'"
+  fi
+
+  if grep -qF '/api/onboarding/complete' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (uses the real onboarding/complete endpoint)"
+  else
+    not_ok "$name (uses the real onboarding/complete endpoint)" "expected a call to /api/onboarding/complete; update this test to match if the integration changed"
+  fi
+
+  if grep -qF 'resp="$(curl -sS -X POST -H '"'"'Content-Type: application/json'"'"' --data "$payload" \' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (onboarding POST omits -f so a failure doesn't crash the script)"
+  else
+    not_ok "$name (onboarding POST omits -f so a failure doesn't crash the script)" "expected a non-f curl call for the onboarding POST"
+  fi
+
+  if grep -qE 'while \(\(attempts < 30\)\); do' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (bounded retry loops, not an unbounded wait or a die-on-timeout)"
+  else
+    not_ok "$name (bounded retry loops, not an unbounded wait or a die-on-timeout)" "expected bounded retry loops waiting for Aurral/Lidarr readiness"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
@@ -528,6 +598,8 @@ test_seerr_stale_credential_guard
 test_hubarr_core_service
 test_hubarr_dashboard_config
 test_hubarr_key_lookup_guards
+test_aurral_profile_and_dependency
+test_wire_aurral_guards
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then

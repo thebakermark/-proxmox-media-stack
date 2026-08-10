@@ -242,6 +242,24 @@ services:
     networks:
       - media
 
+  aurral:
+    <<: *defaults
+    profiles: ["music"]
+    image: ghcr.io/lklynet/aurral:latest
+    container_name: aurral
+    depends_on:
+      - lidarr
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+    ports:
+      - "${BIND_IP}:3001:3001"
+    volumes:
+      - ${CONFIG_ROOT}/aurral:/config
+      - ${DATA_ROOT}:/data
+    networks:
+      - media
+
   audiobookshelf:
     <<: *defaults
     profiles: ["books"]

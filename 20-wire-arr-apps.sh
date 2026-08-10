@@ -394,6 +394,65 @@ wire_seerr() {
     '{"seriesType":"standard","animeSeriesType":"standard","enableSeasonFolders":true,"monitorNewItems":"all","activeLanguageProfileId":1}'
 }
 
+# Aurral is a Lidarr companion for music discovery, picked over AI-driven
+# alternatives (Digarr, Mixarr) specifically because it needs no LLM
+# provider or API cost -- its recommendations come from Last.fm/
+# ListenBrainz/tags. Only runs if the "music" profile (Lidarr) is enabled;
+# Aurral is meaningless without it. Its own docs don't publish a request
+# schema for automated setup, so this was ground-truthed against its
+# actual route source (backend/routes/onboarding.js): one call creates the
+# admin account and connects Lidarr together.
+wire_aurral() {
+  [[ ",${COMPOSE_PROFILES:-}," == *,music,* ]] || return
+  local aurral_base="http://${LOCAL_HOST}:3001"
+
+  local bootstrap="" attempts=0
+  while ((attempts < 30)); do
+    bootstrap="$(curl -fsS "$aurral_base/api/health/bootstrap" 2>/dev/null || true)"
+    [[ -n "$bootstrap" ]] && break
+    sleep 2
+    ((attempts+=1))
+  done
+  if [[ -z "$bootstrap" ]]; then
+    info "Aurral: never became reachable; skipping. Complete its setup manually at $aurral_base."
+    return
+  fi
+  if [[ "$(jq -r '.onboardingRequired // false' <<<"$bootstrap" 2>/dev/null)" != "true" ]]; then
+    info "Aurral setup is already complete."
+    return
+  fi
+
+  local lidarr_key="" lidarr_config="$STACK_DIR/config/lidarr/config.xml"
+  attempts=0
+  while ((attempts < 30)); do
+    [[ -r "$lidarr_config" ]] && lidarr_key="$(read_api_key "$lidarr_config")"
+    [[ -n "$lidarr_key" ]] && break
+    sleep 2
+    ((attempts+=1))
+  done
+  if [[ -z "$lidarr_key" ]]; then
+    info "Aurral: Lidarr isn't ready yet; skipping. Re-run this script once Lidarr has started."
+    return
+  fi
+
+  # localNetworkBypass mirrors the Servarr apps' "disabled for local
+  # addresses" -- auth is only required from outside the LAN. Password
+  # reuses the shared APP_ADMIN_PASSWORD (Aurral requires >= 8 characters;
+  # it's 12).
+  local payload resp
+  payload="$(jq -nc --arg u aurraladmin --arg p "$APP_ADMIN_PASSWORD" --arg key "$lidarr_key" \
+    '{authUser: $u, authPassword: $p,
+      lidarr: {url: "http://lidarr:8686", apiKey: $key, defaultMonitorOption: "none", searchOnAdd: false},
+      security: {localNetworkBypass: {enabled: true}}}')"
+  resp="$(curl -sS -X POST -H 'Content-Type: application/json' --data "$payload" \
+    "$aurral_base/api/onboarding/complete" 2>/dev/null || true)"
+  if jq -e '.success == true' <<<"$resp" >/dev/null 2>&1; then
+    info "Aurral: connected to Lidarr and secured (username: aurraladmin; not required from the LAN, only remotely)."
+  else
+    info "Aurral: could not complete setup automatically; connect it manually at $aurral_base."
+  fi
+}
+
 # Hubarr is this stack's own name for the gethomepage/homepage dashboard
 # (compose.yml's "hubarr" service) -- one page showing live status for
 # every app. It needs each app's own API key/credential to do that, not a
@@ -581,8 +640,12 @@ secure_bazarr_auth
 
 setup_jellyfin
 wire_seerr
+wire_aurral
 wire_hubarr
 
 info "Sonarr, Radarr, Prowlarr, Bazarr, Jellyfin, Seerr, Hubarr, qBittorrent and the shared /data paths are connected."
 info "Hubarr (this stack's control-center dashboard): http://${LOCAL_HOST}:3000"
+if [[ ",${COMPOSE_PROFILES:-}," == *,music,* ]]; then
+  info "Aurral (music discovery): http://${LOCAL_HOST}:3001"
+fi
 info "Add only your authorized indexers in Prowlarr; they will synchronize into Sonarr and Radarr."
