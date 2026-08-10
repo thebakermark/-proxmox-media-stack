@@ -394,6 +394,124 @@ wire_seerr() {
     '{"seriesType":"standard","animeSeriesType":"standard","enableSeasonFolders":true,"monitorNewItems":"all","activeLanguageProfileId":1}'
 }
 
+# Hubarr is this stack's own name for the gethomepage/homepage dashboard
+# (compose.yml's "hubarr" service) -- one page showing live status for
+# every app. It needs each app's own API key/credential to do that, not a
+# new account of its own, so this reuses what's already been generated
+# above instead of minting anything new.
+wire_hubarr() {
+  local config_dir="$STACK_DIR/config/hubarr"
+  local services_file="$config_dir/services.yaml"
+  if [[ -f "$services_file" ]]; then
+    info "Hubarr: dashboard already configured; leaving it (and any customizing you've done) alone."
+    return
+  fi
+  command -v python3 >/dev/null || { info "Hubarr: python3 unavailable; skipping dashboard setup."; return; }
+
+  # Jellyfin has no API key of its own yet -- create one the same way its
+  # own Dashboard > API Keys page would, using the same admin session
+  # pattern setup_jellyfin() above already established.
+  local jellyfin_key=""
+  if [[ -n "${JELLYFIN_PASSWORD:-}" ]]; then
+    local jf_base="http://${LOCAL_HOST}:8096" jf_auth jf_token
+    jf_auth="$(curl -fsS -X POST \
+      -H 'X-Emby-Authorization: MediaBrowser Client="media-stack-installer", Device="server", DeviceId="proxmox-media-stack-installer", Version="1.0.0"' \
+      -H 'Content-Type: application/json' \
+      --data "$(jq -nc --arg u "${JELLYFIN_USERNAME:-admin}" --arg p "$JELLYFIN_PASSWORD" '{Username:$u,Pw:$p}')" \
+      "$jf_base/Users/AuthenticateByName" 2>/dev/null || true)"
+    jf_token="$(jq -r '.AccessToken // empty' <<<"$jf_auth" 2>/dev/null)"
+    if [[ -n "$jf_token" ]]; then
+      curl -fsS -X POST -H "X-Emby-Token: $jf_token" "$jf_base/Auth/Keys?app=Hubarr" >/dev/null 2>&1 || true
+      jellyfin_key="$(curl -sS -H "X-Emby-Token: $jf_token" "$jf_base/Auth/Keys" 2>/dev/null \
+        | jq -r '[.Items[]? | select(.AppName=="Hubarr")][0].AccessToken // empty' 2>/dev/null || true)"
+    fi
+  fi
+
+  # Seerr has no separate API-key-only auth path either -- read the key it
+  # already generated for itself, over the admin session still live in
+  # $SEERR_COOKIE_JAR from wire_seerr above (if that succeeded). A non-empty
+  # cookie jar isn't proof the session is actually authenticated -- Seerr
+  # can set a cookie on a failed login too -- so this deliberately omits -f
+  # and treats any non-2xx (a 401/403 here) the same as "no session": empty
+  # key, not a crash. Caught live: without this, a stale Jellyfin credential
+  # (see wire_seerr above) left an unauthenticated cookie that made this an
+  # uncaught curl -f failure under set -e.
+  local seerr_key=""
+  if [[ -s "$SEERR_COOKIE_JAR" ]]; then
+    seerr_key="$(curl -sS -b "$SEERR_COOKIE_JAR" \
+      "http://${LOCAL_HOST}:5055/api/v1/settings/main" 2>/dev/null | jq -r '.apiKey // empty' 2>/dev/null || true)"
+  fi
+
+  local bazarr_config="$STACK_DIR/config/bazarr/config/config.yaml" bazarr_key=""
+  if [[ -r "$bazarr_config" ]]; then
+    bazarr_key="$(python3 -c "
+import yaml
+try:
+    with open('$bazarr_config') as f:
+        print((yaml.safe_load(f) or {}).get('auth', {}).get('apikey') or '')
+except Exception:
+    pass
+" 2>/dev/null)"
+  fi
+
+  install -d -m 0775 -o "${PUID:-1000}" -g "${PGID:-1000}" "$config_dir"
+
+  python3 - "$config_dir" "$LOCAL_HOST" \
+    "$SONARR_KEY" "$RADARR_KEY" "$PROWLARR_KEY" "$bazarr_key" "$jellyfin_key" "$seerr_key" \
+    "${HUBARR_QBIT_USER:-admin}" "${HUBARR_QBIT_PASS:-}" <<'PYEOF'
+import sys, os, yaml
+
+config_dir, host = sys.argv[1], sys.argv[2]
+sonarr_key, radarr_key, prowlarr_key = sys.argv[3], sys.argv[4], sys.argv[5]
+bazarr_key, jellyfin_key, seerr_key = sys.argv[6], sys.argv[7], sys.argv[8]
+qbit_user, qbit_pass = sys.argv[9], sys.argv[10]
+
+
+def service(name, icon, port, key=None, wtype=None, extra=None, creds=None):
+    entry = {"icon": icon, "href": f"http://{host}:{port}"}
+    if wtype and (key or creds):
+        widget = {"type": wtype, "url": f"http://{host}:{port}"}
+        if key:
+            widget["key"] = key
+        if creds:
+            widget.update(creds)
+        if extra:
+            widget.update(extra)
+        entry["widget"] = widget
+    return {name: entry}
+
+
+groups = [
+    {"Watch & Request": [
+        service("Jellyfin", "jellyfin.png", 8096, key=jellyfin_key, wtype="jellyfin", extra={"version": 2}),
+        service("Seerr", "overseerr.png", 5055, key=seerr_key, wtype="seerr"),
+    ]},
+    {"Automation": [
+        service("Sonarr", "sonarr.png", 8989, key=sonarr_key, wtype="sonarr", extra={"enableQueue": True}),
+        service("Radarr", "radarr.png", 7878, key=radarr_key, wtype="radarr", extra={"enableQueue": True}),
+        service("Prowlarr", "prowlarr.png", 9696, key=prowlarr_key, wtype="prowlarr"),
+        service("Bazarr", "bazarr.png", 6767, key=bazarr_key, wtype="bazarr"),
+    ]},
+    {"Downloads": [
+        service("qBittorrent", "qbittorrent.png", 8080, wtype="qbittorrent",
+                creds={"username": qbit_user, "password": qbit_pass} if qbit_pass else None),
+    ]},
+]
+
+with open(os.path.join(config_dir, "services.yaml"), "w") as f:
+    yaml.safe_dump(groups, f, default_flow_style=False, sort_keys=False)
+
+settings_path = os.path.join(config_dir, "settings.yaml")
+if not os.path.exists(settings_path):
+    with open(settings_path, "w") as f:
+        yaml.safe_dump({"title": "Hubarr", "theme": "dark", "color": "slate"}, f, default_flow_style=False)
+PYEOF
+
+  chown -R "${PUID:-1000}:${PGID:-1000}" "$config_dir" 2>/dev/null || true
+  docker restart hubarr >/dev/null 2>&1 || true
+  info "Hubarr: dashboard configured at http://${LOCAL_HOST}:3000 with live status for every app."
+}
+
 ensure_prowlarr_application() {
   local name="$1" implementation="$2" app_url="$3" app_key="$4"
   local prowlarr_base="http://${LOCAL_HOST}:9696"
@@ -437,6 +555,12 @@ if [[ -z "${QBIT_PASSWORD:-}" ]]; then
 fi
 ensure_qbittorrent Sonarr "http://${LOCAL_HOST}:8989" "$SONARR_KEY" tvCategory tv "$QBIT_USER" "$QBIT_PASSWORD"
 ensure_qbittorrent Radarr "http://${LOCAL_HOST}:7878" "$RADARR_KEY" movieCategory movies "$QBIT_USER" "$QBIT_PASSWORD"
+# Hubarr's qBittorrent widget (wired up much later below, after Jellyfin/
+# Seerr) needs this too -- keep one copy under its own name rather than
+# delaying the unset below, which exists specifically to stop carrying the
+# plaintext password through the rest of this script's execution.
+HUBARR_QBIT_USER="$QBIT_USER"
+HUBARR_QBIT_PASS="$QBIT_PASSWORD"
 unset QBIT_PASSWORD
 
 PROWLARR_KEY="$(wait_for_key Prowlarr "$STACK_DIR/config/prowlarr/config.xml")"
@@ -457,6 +581,8 @@ secure_bazarr_auth
 
 setup_jellyfin
 wire_seerr
+wire_hubarr
 
-info "Sonarr, Radarr, Prowlarr, Bazarr, Jellyfin, Seerr, qBittorrent and the shared /data paths are connected."
+info "Sonarr, Radarr, Prowlarr, Bazarr, Jellyfin, Seerr, Hubarr, qBittorrent and the shared /data paths are connected."
+info "Hubarr (this stack's control-center dashboard): http://${LOCAL_HOST}:3000"
 info "Add only your authorized indexers in Prowlarr; they will synchronize into Sonarr and Radarr."

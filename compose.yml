@@ -285,11 +285,10 @@ services:
     networks:
       - media
 
-  homepage:
+  hubarr:
     <<: *defaults
-    profiles: ["admin"]
     image: ghcr.io/gethomepage/homepage:latest
-    container_name: homepage
+    container_name: hubarr
     environment:
       HOMEPAGE_ALLOWED_HOSTS: "*"
       PUID: ${PUID}
@@ -297,7 +296,7 @@ services:
     ports:
       - "${BIND_IP}:3000:3000"
     volumes:
-      - ${CONFIG_ROOT}/homepage:/app/config
+      - ${CONFIG_ROOT}/hubarr:/app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - media

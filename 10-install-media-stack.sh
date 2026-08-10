@@ -160,7 +160,7 @@ for path in recordings/movies recordings/shows recordings/sports recordings/manu
   install -d -m 0775 -o "$PUID" -g "$PGID" "$DATA_ROOT/$path"
 done
 
-for app in gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr plex tautulli lidarr audiobookshelf sabnzbd recyclarr homepage uptime-kuma dispatcharr tunarr; do
+for app in gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr hubarr plex tautulli lidarr audiobookshelf sabnzbd recyclarr uptime-kuma dispatcharr tunarr; do
   install -d -m 0775 -o "$PUID" -g "$PGID" "$CONFIG_ROOT/$app"
 done
 

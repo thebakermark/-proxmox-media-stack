@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 readonly STACK_DIR="/opt/media-stack"
 readonly ENV_FILE="${STACK_DIR}/.env"
-readonly CORE_SERVICES=(gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr)
+readonly CORE_SERVICES=(gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr hubarr)
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 

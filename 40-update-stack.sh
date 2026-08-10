@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 readonly STACK_DIR="/opt/media-stack"
 readonly BACKUP_DIR="/opt/media-stack-backups"
-readonly CORE_SERVICES=(gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr)
+readonly CORE_SERVICES=(gluetun qbittorrent jellyfin sonarr radarr prowlarr bazarr seerr hubarr)
 readonly HEALTH_TIMEOUT_S=120
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }

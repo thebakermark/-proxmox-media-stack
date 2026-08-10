@@ -379,6 +379,141 @@ test_seerr_stale_credential_guard() {
   fi
 }
 
+# --- 11. Hubarr (control-center dashboard) ships as a core, always-on service
+# Homepage (gethomepage/homepage) was sitting in this repo as an unconfigured,
+# opt-in "admin" profile service. Promoted to a core service and rebranded
+# Hubarr per explicit request: it should be part of the default install, not
+# something users have to discover and enable themselves.
+test_hubarr_core_service() {
+  local name="Hubarr ships as a core (always-on) service"
+
+  if grep -qF '  homepage:' "$REPO_DIR/compose.yml"; then
+    not_ok "$name (old homepage service removed)" "compose.yml still defines a 'homepage:' service; it should have been renamed to 'hubarr:'"
+  else
+    ok "$name (old homepage service removed)"
+  fi
+
+  local block
+  block="$(awk '/^  hubarr:/{flag=1} /^  [a-z]/{if ($0 !~ /^  hubarr:/ && flag) exit} flag' "$REPO_DIR/compose.yml")"
+  if [[ -z "$block" ]]; then
+    not_ok "$name (hubarr service defined)" "compose.yml does not define a 'hubarr:' service"
+    return
+  fi
+  ok "$name (hubarr service defined)"
+
+  if grep -qE '^\s+profiles:' <<<"$block"; then
+    not_ok "$name (no profiles: key, i.e. always-on)" "hubarr must not be gated behind an opt-in Compose profile"
+  else
+    ok "$name (no profiles: key, i.e. always-on)"
+  fi
+
+  if grep -qF 'for app in' "$REPO_DIR/10-install-media-stack.sh" && \
+     grep -qE 'for app in [^;]*\bhubarr\b' "$REPO_DIR/10-install-media-stack.sh"; then
+    ok "$name (config directory pre-created by the installer)"
+  else
+    not_ok "$name (config directory pre-created by the installer)" "expected 'hubarr' in 10-install-media-stack.sh's CONFIG_ROOT pre-creation loop"
+  fi
+
+  for f in 30-verify-stack.sh 40-update-stack.sh; do
+    if grep -qE '^readonly CORE_SERVICES=\([^)]*\bhubarr\b[^)]*\)' "$REPO_DIR/$f"; then
+      ok "$name ($f tracks hubarr as a core service)"
+    else
+      not_ok "$name ($f tracks hubarr as a core service)" "expected 'hubarr' in $f's CORE_SERVICES array"
+    fi
+  done
+}
+
+# --- 12. Hubarr's dashboard config reuses existing per-app keys, mints nothing
+# Explicit design decision: the control-center dashboard doesn't get its own
+# sonarradmin-style account. Its widgets authenticate with each app's own
+# already-generated API key/credential (Sonarr/Radarr/Prowlarr/Bazarr API
+# keys, a freshly minted Jellyfin API key, Seerr's own API key, qBittorrent's
+# saved login) -- reusing what's already there instead of expanding the
+# shared-password family further. Verified two ways: static (no new
+# credential scheme referenced) and live (the actual embedded config
+# generator, extracted and run standalone, both attaches widgets when keys
+# are present and gracefully omits them -- plain link, no broken tile --
+# when a key is missing).
+test_hubarr_dashboard_config() {
+  local name="Hubarr dashboard config reuses existing per-app keys"
+
+  if grep -qF 'if [[ -f "$services_file" ]]' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (first-run only -- re-runs don't clobber user customization)"
+  else
+    not_ok "$name (first-run only -- re-runs don't clobber user customization)" "expected wire_hubarr() to skip once services.yaml already exists"
+  fi
+
+  if grep -qF 'hubarradmin' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    not_ok "$name (no new hubarradmin-style account minted)" "found a 'hubarradmin' reference; Hubarr should reuse each app's existing API key/credential instead"
+  else
+    ok "$name (no new hubarradmin-style account minted)"
+  fi
+
+  command -v python3 >/dev/null || { printf 'skip - %s: python3 not available\n' "$name (live config generation)"; return; }
+  python3 -c 'import yaml' 2>/dev/null || { printf 'skip - %s: PyYAML not available\n' "$name (live config generation)"; return; }
+
+  local py_script
+  py_script="$(mktemp)"
+  awk "/<<'PYEOF'\$/{flag=1; next} /^PYEOF\$/{flag=0} flag" "$REPO_DIR/20-wire-arr-apps.sh" > "$py_script"
+  if [[ ! -s "$py_script" ]]; then
+    not_ok "$name (live config generation)" "could not extract the Python config generator from 20-wire-arr-apps.sh; update this test to match"
+    rm -f "$py_script"
+    return
+  fi
+
+  local out_dir
+  out_dir="$(mktemp -d)"
+  if python3 "$py_script" "$out_dir" "192.0.2.1" SONARRKEY RADARRKEY PROWLARRKEY BAZARRKEY JELLYFINKEY SEERRKEY admin secretpass \
+      >/dev/null 2>&1 && [[ -f "$out_dir/services.yaml" ]]; then
+    if grep -q 'key: SONARRKEY' "$out_dir/services.yaml" && grep -q 'password: secretpass' "$out_dir/services.yaml"; then
+      ok "$name (live: widgets attached when keys/credentials are present)"
+    else
+      not_ok "$name (live: widgets attached when keys/credentials are present)" "generated services.yaml did not contain the expected widget keys"
+    fi
+  else
+    not_ok "$name (live: widgets attached when keys/credentials are present)" "the config generator failed to run or produce services.yaml"
+  fi
+  rm -rf "$out_dir"
+
+  out_dir="$(mktemp -d)"
+  if python3 "$py_script" "$out_dir" "192.0.2.1" SONARRKEY RADARRKEY PROWLARRKEY "" "" "" admin "" \
+      >/dev/null 2>&1 && [[ -f "$out_dir/services.yaml" ]]; then
+    if grep -q 'widget:' "$out_dir/services.yaml" && ! grep -qE 'type: (bazarr|jellyfin|seerr|qbittorrent)' "$out_dir/services.yaml"; then
+      ok "$name (live: a missing key/credential degrades to a plain link, not a broken widget)"
+    else
+      not_ok "$name (live: a missing key/credential degrades to a plain link, not a broken widget)" "a widget was attached for an app with no key/credential"
+    fi
+  else
+    not_ok "$name (live: a missing key/credential degrades to a plain link, not a broken widget)" "the config generator failed to run or produce services.yaml"
+  fi
+  rm -rf "$out_dir" "$py_script"
+}
+
+# --- 13. Hubarr's key-lookup calls degrade gracefully on an unauthenticated
+# session, instead of crashing the whole script
+# Caught live: wire_hubarr()'s Seerr apiKey lookup used curl -f against
+# $SEERR_COOKIE_JAR gated only on "the cookie file is non-empty" -- but
+# Seerr sets a cookie on a failed login too (this stack's own Jellyfin
+# credential was stale at the time, see wire_seerr's guard above), so a
+# non-empty jar didn't mean an authenticated one. The 401 that followed was
+# an uncaught curl -f failure (exit 22) that killed the whole script under
+# set -e, exactly like the wire_seerr bug this session already fixed once.
+test_hubarr_key_lookup_guards() {
+  local name="Hubarr's key lookups don't crash on an unauthenticated session"
+
+  if grep -qF 'curl -sS -b "$SEERR_COOKIE_JAR"' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (Seerr apiKey lookup omits -f so a 401 doesn't crash the script)"
+  else
+    not_ok "$name (Seerr apiKey lookup omits -f so a 401 doesn't crash the script)" "expected a non-f curl call reading Seerr's settings/main; a stale/unauthenticated session cookie must not crash the script"
+  fi
+
+  if grep -qF 'jellyfin_key="$(curl -sS -H "X-Emby-Token: $jf_token"' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (Jellyfin API-key lookup omits -f so a failure doesn't crash the script)"
+  else
+    not_ok "$name (Jellyfin API-key lookup omits -f so a failure doesn't crash the script)" "expected a non-f curl call reading Jellyfin's Auth/Keys"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
@@ -390,6 +525,9 @@ test_proton_key_validation
 test_qbittorrent_password_hash
 test_jellyfin_seerr_setup_order
 test_seerr_stale_credential_guard
+test_hubarr_core_service
+test_hubarr_dashboard_config
+test_hubarr_key_lookup_guards
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then

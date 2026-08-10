@@ -8,9 +8,10 @@ Core applications:
 - Sonarr, Radarr, Prowlarr, Bazarr and Seerr
 - qBittorrent isolated behind Gluetun and Proton VPN
 - Automatic Proton VPN port forwarding into qBittorrent
+- Hubarr — a single dashboard with live status for every app above
 - Optional Plex and Tautulli
 - Optional Lidarr, Audiobookshelf, SABnzbd and Recyclarr
-- Optional Homepage, Dozzle and Uptime Kuma
+- Optional Dozzle and Uptime Kuma
 - Optional Dispatcharr IPTV/EPG manager and virtual tuner
 - Optional Tunarr channels built from the Jellyfin library
 
@@ -187,11 +188,22 @@ browsing to them from your own network stays password-free; Bazarr has no
 equivalent local-address bypass, so it always prompts. Re-running the script is
 idempotent and leaves an already-configured app alone.
 
-After this script finishes, Jellyfin, Sonarr, Radarr, Prowlarr, Bazarr, Seerr, and
-qBittorrent are all fully wired to each other — the only things left are genuinely
-account-specific: your legal indexers in Prowlarr, optional subtitle providers in
-Bazarr, and (if you'd rather not use the generated one) changing Jellyfin's admin
-password to something memorable. If you do change it, re-running
+Finally, it configures **Hubarr** — this stack's control-center dashboard (the
+[gethomepage/homepage](https://github.com/gethomepage/homepage) project) — with a
+live tile for every app above. It doesn't need a new account of its own: each tile
+authenticates with the same API key/credential already generated for that app
+(Sonarr/Radarr/Prowlarr/Bazarr/Jellyfin API keys, Seerr's own API key, qBittorrent's
+saved login), so there's nothing new to remember. Hubarr itself has no login —
+consistent with every other admin surface in this stack, it's reachable only on
+your LAN or over Tailscale, never forwarded through your router. It's part of the
+core install, not an optional profile, and configures itself once on first run;
+re-running the script afterward leaves any customizing you've done to it alone.
+
+After this script finishes, Jellyfin, Sonarr, Radarr, Prowlarr, Bazarr, Seerr,
+Hubarr, and qBittorrent are all fully wired to each other — the only things left
+are genuinely account-specific: your legal indexers in Prowlarr, optional subtitle
+providers in Bazarr, and (if you'd rather not use the generated one) changing
+Jellyfin's admin password to something memorable. If you do change it, re-running
 `20-wire-arr-apps.sh` will notice its saved copy is out of date, skip re-linking
 Seerr with a clear message instead of failing, and leave everything else untouched
 — just update `JELLYFIN_PASSWORD` in `.env` (or reconnect Seerr by hand) if you want
@@ -203,6 +215,7 @@ Replace `MEDIA_VM_IP` with the Ubuntu VM's address.
 
 | Application | Address |
 | --- | --- |
+| Hubarr (control-center dashboard) | `http://MEDIA_VM_IP:3000` |
 | Jellyfin | `http://MEDIA_VM_IP:8096` |
 | Seerr requests | `http://MEDIA_VM_IP:5055` |
 | Sonarr | `http://MEDIA_VM_IP:8989` |
@@ -226,7 +239,7 @@ Available profiles:
 - `books` — Audiobookshelf
 - `usenet` — SABnzbd
 - `automation` — Recyclarr
-- `admin` — Homepage, Dozzle and Uptime Kuma
+- `admin` — Dozzle and Uptime Kuma
 - `iptv` — Dispatcharr and Tunarr
 
 Example:
@@ -302,10 +315,11 @@ No safe installer can manufacture these credentials or choices:
 - optional Usenet provider credentials
 - IPTV M3U/XMLTV or Xtream Codes credentials
 
-Jellyfin's admin account and its connections to Seerr, Sonarr, and Radarr, plus the
-Sonarr/Radarr/Prowlarr/Bazarr WebUI logins, are all created automatically by
-`20-wire-arr-apps.sh` (see above) — nothing left to manually click through there
-unless you want to change a generated password.
+Jellyfin's admin account and its connections to Seerr, Sonarr, and Radarr, the
+Sonarr/Radarr/Prowlarr/Bazarr WebUI logins, and Hubarr's dashboard tiles for every
+app are all created automatically by `20-wire-arr-apps.sh` (see above) — nothing
+left to manually click through there unless you want to change a generated
+password.
 
 Those values are entered locally after the VM, paths, permissions and VPN containment are established. When installed via `install.sh`, you enter them right in that same terminal session — there is no separate console login step.
 
