@@ -295,6 +295,9 @@ print(base64.b64encode(derived).decode())
 #      regardless of setup state (/Startup/* requires auth once Jellyfin's
 #      wizard is already complete, breaking a plain readiness check on an
 #      idempotent re-run).
+#  (d) Connecting Seerr to a media server does not by itself mark Seerr as
+#      set up -- initialized stayed false until POST /settings/initialize,
+#      the explicit final step Seerr's own frontend wizard calls, was added.
 test_jellyfin_seerr_setup_order() {
   local name="Jellyfin/Seerr setup: known-bad request patterns don't regress"
 
@@ -320,6 +323,12 @@ test_jellyfin_seerr_setup_order() {
     ok "$name (Jellyfin readiness probe uses an always-unauthenticated endpoint)"
   else
     not_ok "$name (Jellyfin readiness probe uses an always-unauthenticated endpoint)" "expected the readiness retry loop to poll System/Info/Public; /Startup/* requires auth once the wizard is already complete"
+  fi
+
+  if grep -qF 'settings/initialize' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (Seerr setup is explicitly marked complete)"
+  else
+    not_ok "$name (Seerr setup is explicitly marked complete)" "expected a call to settings/initialize; connecting a media server alone does not set Seerr's initialized flag"
   fi
 }
 

@@ -264,6 +264,12 @@ wire_seerr() {
   if [[ "$initialized" != "true" ]]; then
     if jq -e '.id' <<<"$login_resp" >/dev/null 2>&1; then
       info "Seerr: connected to Jellyfin using the generated admin account."
+      # Connecting a media server alone doesn't mark Seerr as set up -- its
+      # own frontend wizard calls this explicitly as the final step after
+      # you click through it by hand; do the same here.
+      curl -fsS -b "$SEERR_COOKIE_JAR" -X POST "$seerr_base/api/v1/settings/initialize" >/dev/null 2>&1 \
+        && info "Seerr: setup marked complete." \
+        || info "Seerr: connected, but could not mark setup complete; check its UI."
     else
       info "Seerr: could not bootstrap automatically yet (it may still be starting); re-run this script in a"
       info "minute, or connect it manually in Seerr's own setup UI."
