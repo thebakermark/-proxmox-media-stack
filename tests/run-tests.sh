@@ -280,6 +280,49 @@ print(base64.b64encode(derived).decode())
   fi
 }
 
+# --- 9. Jellyfin/Seerr auto-setup: specific ordering/payload bugs caught live
+# All three caught by actually running the automation against real
+# containers, not by static review -- each failed silently or with a
+# misleading error rather than an obvious one:
+#  (a) POST /Startup/User 404s unless GET /Startup/User is called first
+#      (it triggers Jellyfin's user-manager init, creating the implicit
+#      first user the POST then renames/passwords).
+#  (b) Seerr's own hostname builder string-concatenates a missing urlBase
+#      as the literal word "undefined" into the connection URL.
+#  (c) The Jellyfin/Seerr readiness probes must not use -f on calls whose
+#      response body is needed on error (-f discards the body on any
+#      non-2xx status), and must poll an endpoint that stays unauthenticated
+#      regardless of setup state (/Startup/* requires auth once Jellyfin's
+#      wizard is already complete, breaking a plain readiness check on an
+#      idempotent re-run).
+test_jellyfin_seerr_setup_order() {
+  local name="Jellyfin/Seerr setup: known-bad request patterns don't regress"
+
+  if ! grep -qF 'curl -fsS "$base/Startup/User" >/dev/null' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    not_ok "$name (GET /Startup/User called before POST)" "expected GET call not found in 20-wire-arr-apps.sh; update this test to match"
+  else
+    ok "$name (GET /Startup/User called before POST)"
+  fi
+
+  if grep -qF 'urlBase:""' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (Seerr fallback login includes urlBase)"
+  else
+    not_ok "$name (Seerr fallback login includes urlBase)" "expected urlBase:\"\" not found in the Seerr auth payload; a missing urlBase becomes the literal string 'undefined' in Seerr's own URL builder"
+  fi
+
+  if grep -qF 'curl -sS -c "$SEERR_COOKIE_JAR"' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (Seerr login calls omit -f so error bodies are readable)"
+  else
+    not_ok "$name (Seerr login calls omit -f so error bodies are readable)" "expected a non-f curl call for Seerr login; -f discards the response body needed to detect the 'no hostname' retry case"
+  fi
+
+  if grep -qF 'System/Info/Public' "$REPO_DIR/20-wire-arr-apps.sh" && grep -q 'for _ in \$(seq 1 30)' "$REPO_DIR/20-wire-arr-apps.sh"; then
+    ok "$name (Jellyfin readiness probe uses an always-unauthenticated endpoint)"
+  else
+    not_ok "$name (Jellyfin readiness probe uses an always-unauthenticated endpoint)" "expected the readiness retry loop to poll System/Info/Public; /Startup/* requires auth once the wizard is already complete"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
@@ -289,6 +332,7 @@ test_vpn_isolation_static
 test_proton_key_parsing
 test_proton_key_validation
 test_qbittorrent_password_hash
+test_jellyfin_seerr_setup_order
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then

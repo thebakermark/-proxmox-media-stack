@@ -168,11 +168,20 @@ sudo /opt/media-stack/30-verify-stack.sh
 
 The wiring script gives Sonarr and Radarr a consistent `/data` view; connects them
 to qBittorrent through Gluetun; enables hardlink imports and automatic file renaming
-in both; connects Bazarr to both; and, once Seerr has completed its own setup
-(Settings → connect it to Jellyfin, which needs your admin login), reminds you where
-to add Sonarr/Radarr in Seerr — Seerr has no service-account API key, only an admin
-session, so that one connection stays manual. The verification script confirms the
-host and torrent network have different public IPs and that hardlinks work.
+in both; connects Bazarr to both; **completes Jellyfin's own setup wizard** (creates
+an admin account — another generated machine credential, printed and saved in `.env`
+the same way as qBittorrent's — and adds Movies/TV Shows/Music libraries pointed at
+`/media/...`); and **connects Seerr to Jellyfin and to Sonarr/Radarr automatically**,
+using that same generated Jellyfin login (Seerr's first Jellyfin connection doubles
+as bootstrapping its own admin user, so no manual clicking is needed there either).
+The verification script confirms the host and torrent network have different public
+IPs and that hardlinks work.
+
+After this script finishes, Jellyfin, Sonarr, Radarr, Prowlarr, Bazarr, Seerr, and
+qBittorrent are all fully wired to each other — the only things left are genuinely
+account-specific: your legal indexers in Prowlarr, optional subtitle providers in
+Bazarr, and (if you'd rather not use the generated one) changing Jellyfin's admin
+password to something memorable.
 
 ## Application addresses
 
@@ -273,13 +282,15 @@ These backups exclude the media library. Use Proxmox Backup Server, ZFS snapshot
 No safe installer can manufacture these credentials or choices:
 
 - Proton WireGuard configuration
-- legal torrent/indexer accounts
-- subtitle-provider credentials
-- Jellyfin administrator account
-- Seerr's connection to Jellyfin and to Sonarr/Radarr (needs Seerr's own admin login)
+- legal torrent/indexer accounts (Prowlarr)
+- subtitle-provider credentials (Bazarr, optional)
 - optional Plex claim token
 - optional Usenet provider credentials
 - IPTV M3U/XMLTV or Xtream Codes credentials
+
+Jellyfin's admin account and its connections to Seerr, Sonarr, and Radarr are all
+created automatically by `20-wire-arr-apps.sh` (see above) — nothing left to
+manually click through there unless you want to change the generated password.
 
 Those values are entered locally after the VM, paths, permissions and VPN containment are established. When installed via `install.sh`, you enter them right in that same terminal session — there is no separate console login step.
 
