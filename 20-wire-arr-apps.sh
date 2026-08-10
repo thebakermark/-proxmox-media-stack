@@ -138,6 +138,77 @@ with open(path, 'w') as f:
   fi
 }
 
+# A single generated password shared across Sonarr/Radarr/Prowlarr/Bazarr's
+# own WebUI logins (each with its own <appname>admin username). Generated
+# once and reused on idempotent re-runs, same as the other credentials
+# above -- not regenerated (and not un-set) just because the script ran
+# again. Auth is required only from outside the LAN where each app
+# supports that distinction; local access stays unauthenticated.
+if [[ -z "${APP_ADMIN_PASSWORD:-}" ]]; then
+  APP_ADMIN_PASSWORD="$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | head -c 12)"
+  sed -i '/^APP_ADMIN_PASSWORD=/d' "$ENV_FILE"
+  echo "APP_ADMIN_PASSWORD=${APP_ADMIN_PASSWORD}" >> "$ENV_FILE"
+  chmod 0600 "$ENV_FILE"
+  info "Generated a shared admin password for Sonarr/Radarr/Prowlarr/Bazarr (saved in ${ENV_FILE})."
+fi
+
+secure_servarr_app() {
+  local app="$1" base="$2" key="$3" api_ver="$4" username="$5"
+  local config
+  config="$(curl -fsS -H "X-Api-Key: $key" "$base/api/$api_ver/config/host")"
+  if [[ "$(jq -r '.authenticationMethod' <<<"$config")" == "forms" \
+     && "$(jq -r '.username' <<<"$config")" == "$username" ]]; then
+    info "$app: authentication already set (username: $username)."
+    return
+  fi
+  local new
+  new="$(jq -c --arg u "$username" --arg p "$APP_ADMIN_PASSWORD" \
+    '.authenticationMethod = "forms" | .authenticationRequired = "disabledForLocalAddresses"
+     | .username = $u | .password = $p | .passwordConfirmation = $p' \
+    <<<"$config")"
+  curl -fsS -X PUT -H "X-Api-Key: $key" -H 'Content-Type: application/json' \
+    --data "$new" "$base/api/$api_ver/config/host/1" >/dev/null
+  info "$app: authentication set (username: $username; not required from the LAN, only remotely)."
+}
+
+secure_bazarr_auth() {
+  local bazarr_config="$STACK_DIR/config/bazarr/config/config.yaml"
+  [[ -r "$bazarr_config" ]] || return
+  command -v python3 >/dev/null || return
+
+  local already
+  already="$(python3 -c "
+import yaml
+with open('$bazarr_config') as f:
+    cfg = yaml.safe_load(f) or {}
+a = cfg.get('auth', {})
+print('yes' if a.get('type') == 'form' and a.get('username') == 'bazarradmin' else 'no')
+" 2>/dev/null || echo no)"
+  if [[ "$already" == "yes" ]]; then
+    info "Bazarr: authentication already set (username: bazarradmin)."
+    return
+  fi
+
+  # Bazarr has no LAN-bypass equivalent to the Servarr apps' "disabled for
+  # local addresses" -- setting a login here means it's always required.
+  if python3 -c "
+import yaml
+path = '$bazarr_config'
+with open(path) as f:
+    cfg = yaml.safe_load(f)
+cfg['auth']['type'] = 'form'
+cfg['auth']['username'] = 'bazarradmin'
+cfg['auth']['password'] = '$APP_ADMIN_PASSWORD'
+with open(path, 'w') as f:
+    yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=True)
+" 2>/dev/null; then
+    docker restart bazarr >/dev/null 2>&1 || true
+    info "Bazarr: authentication set (username: bazarradmin; Bazarr has no LAN-bypass, so this is always required)."
+  else
+    info "Bazarr: could not set authentication; leaving it untouched."
+  fi
+}
+
 # Jellyfin's admin account is a machine credential in the same sense as
 # QBIT_PASSWORD above -- auto-generated, saved in .env, printed for you to
 # change later if you want a memorable password. This is what actually lets
@@ -261,20 +332,33 @@ wire_seerr() {
       "$seerr_base/api/v1/auth/jellyfin" 2>/dev/null || true)"
   fi
 
-  if [[ "$initialized" != "true" ]]; then
-    if jq -e '.id' <<<"$login_resp" >/dev/null 2>&1; then
-      info "Seerr: connected to Jellyfin using the generated admin account."
-      # Connecting a media server alone doesn't mark Seerr as set up -- its
-      # own frontend wizard calls this explicitly as the final step after
-      # you click through it by hand; do the same here.
-      curl -fsS -b "$SEERR_COOKIE_JAR" -X POST "$seerr_base/api/v1/settings/initialize" >/dev/null 2>&1 \
-        && info "Seerr: setup marked complete." \
-        || info "Seerr: connected, but could not mark setup complete; check its UI."
+  # The login above is attempted whether or not Seerr is already
+  # initialized (it also refreshes the session cookie for the calls
+  # below), so check its actual result rather than assuming success --
+  # a stale saved credential (e.g. you changed Jellyfin's password
+  # yourself, as suggested you could) fails it just as a first-time
+  # bootstrap failure would, and both need to stop here rather than
+  # proceed with no valid session.
+  if ! jq -e '.id' <<<"$login_resp" >/dev/null 2>&1; then
+    if [[ "$initialized" == "true" ]]; then
+      info "Seerr: already set up, but could not refresh its session (the saved Jellyfin credential may be"
+      info "stale -- e.g. if you changed Jellyfin's admin password since). Skipping Sonarr/Radarr wiring;"
+      info "sign in to Seerr directly if you need to change anything there."
     else
       info "Seerr: could not bootstrap automatically yet (it may still be starting); re-run this script in a"
       info "minute, or connect it manually in Seerr's own setup UI."
-      return
     fi
+    return
+  fi
+
+  if [[ "$initialized" != "true" ]]; then
+    info "Seerr: connected to Jellyfin using the generated admin account."
+    # Connecting a media server alone doesn't mark Seerr as set up -- its
+    # own frontend wizard calls this explicitly as the final step after
+    # you click through it by hand; do the same here.
+    curl -fsS -b "$SEERR_COOKIE_JAR" -X POST "$seerr_base/api/v1/settings/initialize" >/dev/null 2>&1 \
+      && info "Seerr: setup marked complete." \
+      || info "Seerr: connected, but could not mark setup complete; check its UI."
   else
     info "Seerr setup is already complete."
   fi
@@ -365,6 +449,12 @@ ensure_config_bool Radarr "http://${LOCAL_HOST}:7878" "$RADARR_KEY" mediamanagem
 ensure_config_bool Radarr "http://${LOCAL_HOST}:7878" "$RADARR_KEY" naming renameMovies "automatic file renaming"
 
 wire_bazarr
+
+secure_servarr_app Sonarr "http://${LOCAL_HOST}:8989" "$SONARR_KEY" v3 sonarradmin
+secure_servarr_app Radarr "http://${LOCAL_HOST}:7878" "$RADARR_KEY" v3 radarradmin
+secure_servarr_app Prowlarr "http://${LOCAL_HOST}:9696" "$PROWLARR_KEY" v1 prowlarradmin
+secure_bazarr_auth
+
 setup_jellyfin
 wire_seerr
 

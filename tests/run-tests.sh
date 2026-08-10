@@ -332,6 +332,53 @@ test_jellyfin_seerr_setup_order() {
   fi
 }
 
+# --- 10. Seerr wiring doesn't crash on a stale/failed Jellyfin re-login ------
+# Caught live: once Seerr is already initialized, wire_seerr() still
+# re-attempts the Jellyfin login on every run (to refresh the session
+# cookie). If the saved JELLYFIN_PASSWORD no longer matches -- e.g. the
+# user changed it in Jellyfin's own UI, which is expected to be safe to do
+# -- that login fails, but the code used to fall through anyway into
+# ensure_seerr_service(), whose `curl -fsS` (with -f, uncaught) then died
+# with an unhandled 401 under `set -e`, aborting the whole script. The fix
+# checks login_resp for a real Seerr user id before proceeding, in both the
+# already-initialized and first-time-bootstrap branches, and returns with
+# an informative message instead of crashing.
+test_seerr_stale_credential_guard() {
+  local name="Seerr wiring guards against a failed Jellyfin re-login"
+
+  if ! grep -qF "if ! jq -e '.id' <<<\"\$login_resp\"" "$REPO_DIR/20-wire-arr-apps.sh"; then
+    not_ok "$name (guard present)" "expected a login_resp .id check in 20-wire-arr-apps.sh; update this test to match"
+    return
+  fi
+  ok "$name (guard present)"
+
+  local guard_line service_def_line
+  guard_line="$(grep -n "if ! jq -e '.id' <<<\"\$login_resp\"" "$REPO_DIR/20-wire-arr-apps.sh" | head -1 | cut -d: -f1)"
+  service_def_line="$(grep -n '^  ensure_seerr_service() {' "$REPO_DIR/20-wire-arr-apps.sh" | head -1 | cut -d: -f1)"
+  if [[ -n "$guard_line" && -n "$service_def_line" && "$guard_line" -lt "$service_def_line" ]]; then
+    ok "$name (guard runs before ensure_seerr_service is ever reached)"
+  else
+    not_ok "$name (guard runs before ensure_seerr_service is ever reached)" "guard at line ${guard_line:-?} must precede ensure_seerr_service at line ${service_def_line:-?}"
+  fi
+
+  # The guard condition itself, exercised against the two real shapes
+  # Seerr's /api/v1/auth/jellyfin returns: a user object on success, or an
+  # error object (no .id) on a rejected login.
+  command -v jq >/dev/null || { printf 'skip - %s: jq not available\n' "$name (guard condition behavior)"; return; }
+  local ok_resp='{"id":1,"username":"admin"}'
+  local fail_resp='{"error":"Unauthorized"}'
+  if jq -e '.id' <<<"$ok_resp" >/dev/null 2>&1; then
+    ok "$name (successful login response passes the guard)"
+  else
+    not_ok "$name (successful login response passes the guard)" "a response with .id was incorrectly treated as a failed login"
+  fi
+  if ! jq -e '.id' <<<"$fail_resp" >/dev/null 2>&1; then
+    ok "$name (failed login response is caught by the guard)"
+  else
+    not_ok "$name (failed login response is caught by the guard)" "a response without .id was incorrectly treated as a successful login"
+  fi
+}
+
 test_checksum_parsing
 test_os_detection
 test_storage_safety
@@ -342,6 +389,7 @@ test_proton_key_parsing
 test_proton_key_validation
 test_qbittorrent_password_hash
 test_jellyfin_seerr_setup_order
+test_seerr_stale_credential_guard
 
 printf '\n'
 if [[ "$FAILED" -eq 0 ]]; then

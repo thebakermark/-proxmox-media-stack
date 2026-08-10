@@ -177,11 +177,25 @@ as bootstrapping its own admin user, so no manual clicking is needed there eithe
 The verification script confirms the host and torrent network have different public
 IPs and that hardlinks work.
 
+It also **secures each app's own WebUI login** instead of leaving them open on the
+LAN: Sonarr, Radarr, Prowlarr and Bazarr each get a dedicated username
+(`sonarradmin`, `radarradmin`, `prowlarradmin`, `bazarradmin`) and one shared
+generated password, saved as `APP_ADMIN_PASSWORD` in `.env` — retrieve it with
+`sudo grep APP_ADMIN_PASSWORD /opt/media-stack/.env`. Sonarr, Radarr and Prowlarr
+only require that login from *outside* the LAN (`disabledForLocalAddresses`), so
+browsing to them from your own network stays password-free; Bazarr has no
+equivalent local-address bypass, so it always prompts. Re-running the script is
+idempotent and leaves an already-configured app alone.
+
 After this script finishes, Jellyfin, Sonarr, Radarr, Prowlarr, Bazarr, Seerr, and
 qBittorrent are all fully wired to each other — the only things left are genuinely
 account-specific: your legal indexers in Prowlarr, optional subtitle providers in
 Bazarr, and (if you'd rather not use the generated one) changing Jellyfin's admin
-password to something memorable.
+password to something memorable. If you do change it, re-running
+`20-wire-arr-apps.sh` will notice its saved copy is out of date, skip re-linking
+Seerr with a clear message instead of failing, and leave everything else untouched
+— just update `JELLYFIN_PASSWORD` in `.env` (or reconnect Seerr by hand) if you want
+the automation to pick it back up.
 
 ## Application addresses
 
@@ -288,9 +302,10 @@ No safe installer can manufacture these credentials or choices:
 - optional Usenet provider credentials
 - IPTV M3U/XMLTV or Xtream Codes credentials
 
-Jellyfin's admin account and its connections to Seerr, Sonarr, and Radarr are all
-created automatically by `20-wire-arr-apps.sh` (see above) — nothing left to
-manually click through there unless you want to change the generated password.
+Jellyfin's admin account and its connections to Seerr, Sonarr, and Radarr, plus the
+Sonarr/Radarr/Prowlarr/Bazarr WebUI logins, are all created automatically by
+`20-wire-arr-apps.sh` (see above) — nothing left to manually click through there
+unless you want to change a generated password.
 
 Those values are entered locally after the VM, paths, permissions and VPN containment are established. When installed via `install.sh`, you enter them right in that same terminal session — there is no separate console login step.
 
