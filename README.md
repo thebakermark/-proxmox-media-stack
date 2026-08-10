@@ -137,13 +137,25 @@ It will:
 4. Install QEMU Guest Agent.
 5. Install Docker Engine and Compose from Docker's official Ubuntu repository.
 6. Ask for your Proton VPN WireGuard configuration — paste its contents directly
-   (finish with Ctrl-D), or point it at a `.conf` file already on the VM.
+   (finish with Ctrl-D), or point it at a `.conf` file already on the VM. The key
+   is validated (must be a real 44-character key, not a masked placeholder) before
+   it's written anywhere, so a bad paste fails immediately with a clear message
+   instead of silently breaking Gluetun later.
 7. Create the media/download directory structure.
 8. Start the core stack.
 
 When run through `install.sh`, all of this happens automatically over the SSH
 session it opens into the guest — steps 6 (the interactive prompts above) are the
 only place you need to type or paste anything.
+
+**If Gluetun ever fails to start** because the Proton config was wrong (a common
+cause: Proton, like WireGuard generally, only shows a profile's real private key
+once, at creation — re-opening or re-downloading an existing profile shows it
+masked), fix just that piece without reinstalling anything else:
+
+```bash
+sudo /opt/media-stack/fix-proton-vpn.sh
+```
 
 qBittorrent's WebUI password is generated automatically during install (a machine
 credential for internal API calls, printed at the end of `10-install-media-stack.sh`

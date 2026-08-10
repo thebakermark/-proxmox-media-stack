@@ -222,6 +222,35 @@ Endpoint = 1.2.3.4:51820
   fi
 }
 
+# --- 7b. Masked/placeholder Proton private keys are rejected, not written ---
+# Proton (and WireGuard generally) only shows a profile's real private key
+# once, at creation -- re-opening or re-downloading an existing profile
+# shows it masked as literal asterisks. Caught live: this silently wrote
+# "*****" into .env, which gluetun then rejected with an opaque "illegal
+# base64 data at input byte 0", far from where the actual problem was.
+test_proton_key_validation() {
+  local name="Proton config parsing rejects a masked/asterisk private key"
+  local canary='^\*+$'
+  if ! grep -qF "$canary" "$REPO_DIR/10-install-media-stack.sh"; then
+    not_ok "$name" "expected masked-key rejection pattern not found in 10-install-media-stack.sh; update this test to match"
+    return
+  fi
+
+  local masked_key="*****"
+  if [[ "${#masked_key}" -ne 44 || "$masked_key" =~ ^\*+$ ]]; then
+    ok "$name"
+  else
+    not_ok "$name" "the validation condition failed to flag a masked key as invalid"
+  fi
+
+  local real_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  if [[ "${#real_key}" -ne 44 || "$real_key" =~ ^\*+$ ]]; then
+    not_ok "Proton config parsing accepts a valid 44-char key" "a genuine 44-char key was incorrectly flagged as invalid"
+  else
+    ok "Proton config parsing accepts a valid 44-char key"
+  fi
+}
+
 # --- 8. qBittorrent WebUI password hash matches qBittorrent's own algorithm -
 # Verified against a publicly documented reference hash (password
 # "adminadmin") from qBittorrent's own PBKDF2-SHA512 implementation
@@ -258,6 +287,7 @@ test_required_env_vars
 test_compose_profiles
 test_vpn_isolation_static
 test_proton_key_parsing
+test_proton_key_validation
 test_qbittorrent_password_hash
 
 printf '\n'

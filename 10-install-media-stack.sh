@@ -140,6 +140,7 @@ install -m 0755 "$SOURCE_DIR/20-wire-arr-apps.sh" "$STACK_DIR/20-wire-arr-apps.s
 install -m 0755 "$SOURCE_DIR/30-verify-stack.sh" "$STACK_DIR/30-verify-stack.sh"
 install -m 0755 "$SOURCE_DIR/40-update-stack.sh" "$STACK_DIR/40-update-stack.sh"
 install -m 0755 "$SOURCE_DIR/50-backup-stack.sh" "$STACK_DIR/50-backup-stack.sh"
+install -m 0755 "$SOURCE_DIR/fix-proton-vpn.sh" "$STACK_DIR/fix-proton-vpn.sh"
 
 # `install -d -o -g` only sets ownership on the final directory it creates,
 # not on any parent directories it auto-creates along the way -- create the
@@ -196,6 +197,15 @@ PROTON_PRIVATE_KEY="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' <<<"$PR
 PROTON_ADDRESSES="$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' <<<"$PROTON_CONFIG_CONTENT" | head -1 | cut -d',' -f1 | tr -d ' ')"
 [[ -n "$PROTON_PRIVATE_KEY" ]] || die "PrivateKey was not found in the Proton configuration."
 [[ -n "$PROTON_ADDRESSES" ]] || die "Address was not found in the Proton configuration."
+# A WireGuard private key is always 44 base64 characters. Proton (like most
+# WireGuard key generators) only ever shows the real private key once, at
+# the moment a profile is first created -- re-opening or re-downloading an
+# existing profile shows it masked (literal asterisks), since the server
+# never stores it. Catch that here with a clear message instead of writing
+# an unusable value that only fails later, opaquely, inside gluetun.
+if [[ "${#PROTON_PRIVATE_KEY}" -ne 44 || "$PROTON_PRIVATE_KEY" =~ ^\*+$ ]]; then
+  die "PrivateKey doesn't look like a real WireGuard key (got ${#PROTON_PRIVATE_KEY} characters, expected 44). If it's masked with asterisks, you're viewing an existing profile -- Proton (and WireGuard generally) only shows the real private key once, when a profile is first created. Generate a brand-new WireGuard configuration profile and use that file immediately."
+fi
 unset PROTON_INPUT PROTON_CONFIG_CONTENT
 
 command -v python3 >/dev/null || die "python3 is required to generate the qBittorrent WebUI credential."
