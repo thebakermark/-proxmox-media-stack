@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SOURCE_DIR
 readonly STACK_DIR="/opt/media-stack"
 readonly ENV_FILE="${STACK_DIR}/.env"
 readonly BASE_COMPOSE="${STACK_DIR}/compose.yml"
@@ -12,7 +14,12 @@ info() { printf '%s\n' "$*"; }
 [[ ${EUID} -eq 0 ]] || die "Run with sudo: sudo ./60-enable-music-streaming.sh"
 [[ -r "$ENV_FILE" ]] || die "Media stack environment not found at $ENV_FILE."
 [[ -r "$BASE_COMPOSE" ]] || die "Base compose file not found at $BASE_COMPOSE."
-[[ -r "$MUSIC_COMPOSE" ]] || die "Music streaming compose overlay not found at $MUSIC_COMPOSE."
+[[ -r "$SOURCE_DIR/compose.music-streaming.yml" ]] || die "compose.music-streaming.yml must be beside this script."
+
+# Keep the overlay in /opt/media-stack so future updates and manual Compose
+# commands use the same canonical stack directory as the core installer.
+install -m 0644 "$SOURCE_DIR/compose.music-streaming.yml" "$MUSIC_COMPOSE"
+install -m 0755 "$SOURCE_DIR/60-enable-music-streaming.sh" "$STACK_DIR/60-enable-music-streaming.sh"
 
 # shellcheck disable=SC1090
 source "$ENV_FILE"
