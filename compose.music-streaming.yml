@@ -1,0 +1,25 @@
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      ND_LOGLEVEL: info
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_PORT: "4533"
+    ports:
+      - "${BIND_IP}:4533:4533"
+    volumes:
+      - ${CONFIG_ROOT}/navidrome:/data
+      - ${DATA_ROOT}/media/music:/music:ro
+    networks:
+      - media
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
